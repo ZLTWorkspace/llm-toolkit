@@ -107,15 +107,38 @@ def apply_sparse(model, named_mask: dict):
 
 @torch.no_grad()
 def mergeW2AB(W, A, B, lora_scaling):
+    """
+    Given:
+      - W: a (d x d) base weight matrix
+      - A: a (d x r) "LoRA A" matrix
+      - B: a (r x d) "LoRA B" matrix
+      - lora_scaling: a scalar to apply to (A @ B)
+
+    We solve:
+        min_{A1,B1} || W + (A@B)*lora_scaling - ( (A + A1)(B + B1) ) ||_F^2
+
+    Let r = A.shape[1].  The best solution follows from
+    taking the best rank-r approximation to M = W + (A @ B)*lora_scaling.
+    Then we factor the rank-r approximation with shapes (d x r) and (r x d).
+    Finally, we solve for A1 and B1 that yield that factorization.
+
+    Returns:
+      A + A1        (of size d x r)
+      B + B1        (of size r x d)
+
+    So that (A + A1, B + B1) further factorizes M_approx with rank <= r.
+    """
     if len(W.shape) != 2 or len(A.shape) != 2 or len(B.shape) != 2:
         raise ValueError()
     if min(A.shape) != min(B.shape):
         raise ValueError()
 
+    # TODO check r is in [1,2,4,8,16,32,64,128,256,512]
     r = min(A.shape)
+
     M = W + (B @ A) * lora_scaling
     M = M.to(dtype=torch.float32)
-    U, S, Vh = torch.linalg.svd(M, full_matrices=True)
+    U, S, Vh = torch.linalg.svd(M, full_matrices=False)
 
     # Extract the top r singular values and corresponding singular vectors:
     # U_r -> d x r matrix (top r left singular vectors)
@@ -135,6 +158,11 @@ def mergeW2AB(W, A, B, lora_scaling):
     # Y_opt = A + A1 = Sigma_r^(1/2) * V_r^T. Note: V_r^T is given by Vh_r.
     X_opt = U_r @ Sigma_r_half
     Y_opt = Sigma_r_half @ Vh_r
+
+    # TODO check if correct in TP or PP training
+    sqrt_lora_scaling = torch.sqrt(torch.tensor(lora_scaling, device=X_opt.device))
+    X_opt = X_opt / sqrt_lora_scaling
+    Y_opt = Y_opt / sqrt_lora_scaling
 
     return Y_opt.to(dtype=A.dtype), X_opt.to(dtype=B.dtype)
 
