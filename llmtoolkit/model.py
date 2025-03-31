@@ -16,6 +16,7 @@ from peft import (
     LoraConfig,
     AdaLoraConfig,
     VeraConfig,
+    EvaConfig,
     PrefixTuningConfig,
     PromptTuningConfig,
     get_peft_model,
@@ -110,6 +111,7 @@ def peft_model(
                 init_lora_weights=init_lora_weights
                 if init_lora_weights is not None
                 else True,
+                eva_config = EvaConfig(rho = 2.0) if init_lora_weights == "eva" else None,
             )
             _peft_model = get_peft_model(model, config)
         elif peft_method == "lorafa":
@@ -122,6 +124,7 @@ def peft_model(
                 init_lora_weights=init_lora_weights
                 if init_lora_weights is not None
                 else True,
+                eva_config = EvaConfig(rho = 2.0) if init_lora_weights == "eva" else None,
             )
             _peft_model = get_peft_model(model, config)
             for name, param in _peft_model.named_parameters():
@@ -214,7 +217,9 @@ def get_accelerate_model(
         "attn_implementation": attn_implementation,
         "torch_dtype": compute_dtype,
     }
-    if parallelism == "pp":
+    if parallelism == "dp":
+        pretrained_model_kwargs.update({"device_map": "cuda"})
+    elif parallelism == "pp":
         pretrained_model_kwargs.update({"device_map": "auto"})
 
     if quant_config:
