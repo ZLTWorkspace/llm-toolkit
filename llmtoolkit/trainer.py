@@ -81,7 +81,9 @@ class Seq2SeqTrainer_optim(BaseSeq2SeqTrainer):
         ]
         if self.adamw == "lorafa":
             print_rank_0("Creating AdamW_lorafa.")
-            self.optimizer = AdamW_lorafa(param_groups)
+            # self.optimizer = AdamW_lorafa(param_groups)
+            from peft.optimizers import create_lorafa_optimizer
+            self.optimizer = create_lorafa_optimizer(model = self.model, r = 16, lora_alpha = 32, learning_rate = self.args.learning_rate)
         elif self.adamw == "lorapro":
             print_rank_0("Creating AdamW_lorapro.")
             self.optimizer = AdamW_lorapro(param_groups)
