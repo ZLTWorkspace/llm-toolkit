@@ -168,6 +168,77 @@ def mergeW2AB(W, A, B, lora_scaling):
 
 
 @torch.no_grad()
+def decompositionW(W, r, dtype, transpose_for_linear_weight = True):
+    assert len(W.shape) == 2
+    assert r in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+
+    M = W.to(dtype=torch.float32)
+    U, S, Vh = torch.linalg.svd(M, full_matrices=False)
+
+    # Extract the top r singular values and corresponding singular vectors:
+    # U_r -> d x r matrix (top r left singular vectors)
+    # S_r -> r singular values (top r)
+    # Vh_r -> r x d matrix (top r right singular vectors transposed)
+    U_r = U[:, :r]
+    S_r = S[:r]
+    Vh_r = Vh[:r, :]
+
+    # Compute Sigma_r^(1/2) as a diagonal matrix with the square roots of S_r.
+    # Since S_r contains nonnegative singular values, taking the square root works elementwise.
+    sqrt_S_r = torch.sqrt(S_r)
+    Sigma_r_half = torch.diag(sqrt_S_r)
+
+    # Form the optimal factors:
+    # X_opt = U_r * Sigma_r^(1/2)
+    # Y_opt = Sigma_r^(1/2) * V_r^T. Note: V_r^T is given by Vh_r.
+    X_opt = U_r @ Sigma_r_half
+    Y_opt = Sigma_r_half @ Vh_r
+    
+    if transpose_for_linear_weight:
+        return X_opt.T.to(dtype=dtype), Y_opt.T.to(dtype=dtype)
+    else:
+        return X_opt.to(dtype=dtype), Y_opt.to(dtype=dtype)
+
+
+@torch.no_grad()
+def decompositionW2LR(W:torch.Tensor, r:int, dtype:torch.dtype):
+    # suppose W has shape (m,n)
+    # we decompose W into L(m,r) and R(r,n)
+    # 1. if W is a Tensor, and no transpose_for_linear_weight, return L(m,r), R(r,n)
+    # 2. if W is a Tensor, and transpose_for_linear_weight, return L(m,r).T, R(r,n).T
+    # 3. if W is from a linear.weight, and no transpose_for_linear_weight, return 
+    # 4. if W is from a linear.weight, and transpose_for_linear_weight, return 
+    # note if W is from a linear.weight, it should has shape (out_features,in_features), not (in_features,out_features)
+    # we decompose W into L(W.shape[0],r) and R(r,W.shape[1])
+    # 
+    assert len(W.shape) == 2
+    assert r in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+
+    M = W.to(dtype=torch.float32)
+    U, S, Vh = torch.linalg.svd(M, full_matrices=False)
+
+    # Extract the top r singular values and corresponding singular vectors:
+    # U_r -> d x r matrix (top r left singular vectors)
+    # S_r -> r singular values (top r)
+    # Vh_r -> r x d matrix (top r right singular vectors transposed)
+    U_r = U[:, :r]
+    S_r = S[:r]
+    Vh_r = Vh[:r, :]
+
+    # Compute Sigma_r^(1/2) as a diagonal matrix with the square roots of S_r.
+    # Since S_r contains nonnegative singular values, taking the square root works elementwise.
+    sqrt_S_r = torch.sqrt(S_r)
+    Sigma_r_half = torch.diag(sqrt_S_r)
+
+    # Form the optimal factors:
+    # X_opt = U_r * Sigma_r^(1/2)
+    # Y_opt = Sigma_r^(1/2) * V_r^T. Note: V_r^T is given by Vh_r.
+    L = U_r @ Sigma_r_half
+    R = Sigma_r_half @ Vh_r
+    return R.to(dtype=dtype), L.to(dtype=dtype)
+
+
+@torch.no_grad()
 def prune_magnitude(
     model,
     sparsity_ratio: float = 0.5,
@@ -271,14 +342,20 @@ def prune_magnitude(
                             named_mask[base_layer_name].cuda()
                         ] = 0
                         tmp_W = tmp_W - dequantize_base_layer_data
-                        m.lora_A.default.weight.data, m.lora_B.default.weight.data = (
-                            mergeW2AB(
-                                tmp_W,
-                                m.lora_A.default.weight.data,
-                                m.lora_B.default.weight.data,
-                                lora_scaling,
-                            )
+                        # TODO: safe way to obtain r
+                        m.sparse_A.weight.data, m.sparse_B.weight.data = decompositionW2LR(
+                            tmp_W,
+                            model.peft_config["default"].r,
+                            m.lora_A.default.weight.data.dtype,
                         )
+                        # m.lora_A.default.weight.data, m.lora_B.default.weight.data = (
+                        #     mergeW2AB(
+                        #         tmp_W,
+                        #         m.lora_A.default.weight.data,
+                        #         m.lora_B.default.weight.data,
+                        #         lora_scaling,
+                        #     )
+                        # )
                         # check whether tmp_W.to("cpu")
                         del tmp_W
                     else:
@@ -332,15 +409,22 @@ def prune_magnitude(
                                 named_mask[base_layer_name].cuda()
                             ] = 0
                             tmp_W = tmp_W - m.base_layer.weight.data
-                            (
-                                m.lora_A.default.weight.data,
-                                m.lora_B.default.weight.data,
-                            ) = mergeW2AB(
-                                tmp_W,
-                                m.lora_A.default.weight.data,
-                                m.lora_B.default.weight.data,
-                                lora_scaling,
+                            m.sparse_A.weight.data, m.sparse_B.weight.data = (
+                                decompositionW2LR(
+                                    tmp_W,
+                                    model.peft_config["default"].r,
+                                    m.lora_A.default.weight.data.dtype,
+                                )
                             )
+                            # (
+                            #     m.lora_A.default.weight.data,
+                            #     m.lora_B.default.weight.data,
+                            # ) = mergeW2AB(
+                            #     tmp_W,
+                            #     m.lora_A.default.weight.data,
+                            #     m.lora_B.default.weight.data,
+                            #     lora_scaling,
+                            # )
                             # check whether tmp_W.to("cpu")
                             del tmp_W
             else:

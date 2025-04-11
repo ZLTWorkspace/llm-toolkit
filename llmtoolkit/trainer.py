@@ -9,6 +9,7 @@ from transformers import (
 
 from .optim import (
     AdamW_lorafa,
+    zigzaglora,
 )
 from .optim_lorapro import (
     AdamW_lorapro,
@@ -85,6 +86,9 @@ class Seq2SeqTrainer_optim(BaseSeq2SeqTrainer):
         elif self.adamw == "lorapro":
             print_rank_0("Creating AdamW_lorapro.")
             self.optimizer = AdamW_lorapro(param_groups)
+        elif self.adamw == "zigzaglora":
+            print_rank_0("Creating zigzaglora.")
+            self.optimizer = zigzaglora(param_groups)
         elif self.adamw == "loraplus":
             print_rank_0("Creating loraplus.")
             from peft.optimizers import create_loraplus_optimizer
