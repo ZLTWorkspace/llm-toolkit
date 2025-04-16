@@ -1,10 +1,10 @@
 import torch
 
 from .utils import (
-    require_lib,
     gsi,
-    rank_0,
     print_rank_0,
+    rank_0,
+    require_lib,
 )
 
 
@@ -48,6 +48,16 @@ def single_inference(
 
     return pred_text
 
+def batched_inference(
+    prompts: list,
+    model_name_or_path: str,
+    peft_name_or_path: str = None,
+    max_lora_rank: int = 128,
+    max_tokens: int = 1024,
+    load_in_4bit: bool = False,
+    backend: str = "transformers",
+):
+    pass
 
 def vllm_inference(
     prompts: list,
@@ -58,9 +68,9 @@ def vllm_inference(
     load_in_4bit: bool = False,
 ) -> list:
     require_lib("vllm")
+    import torch
     from vllm import LLM, SamplingParams
     from vllm.lora.request import LoRARequest
-    import torch
 
     sampling_params = SamplingParams(temperature=0.0, top_p=0.1, max_tokens=max_tokens)
 

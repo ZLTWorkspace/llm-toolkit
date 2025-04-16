@@ -1,17 +1,9 @@
-import os
-import tempfile
-import shutil
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
 
 from llmtoolkit import (
     infly_evaluate,
-    safe_dict2file,
-    print_rank_0,
-    load,
     resize_base_model_and_replace_lmhead_embed_tokens,
+    safe_dict2file,
 )
 
 

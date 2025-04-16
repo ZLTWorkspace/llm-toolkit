@@ -1,18 +1,11 @@
-from typing import Tuple, Union
 
-import numpy as np
-import torch
-
-from typing import Callable, Iterable, Tuple, Optional, Dict
+import math
+from collections.abc import Callable, Iterable
 
 import torch
 import torch.nn as nn
-from torch.optim import Optimizer
-from torch import Tensor
-from torch._utils import is_compiling
 from torch.cuda.amp import autocast
-
-import math
+from torch.optim import Optimizer
 
 
 class AdamW_lorafa(Optimizer):
@@ -20,7 +13,7 @@ class AdamW_lorafa(Optimizer):
         self,
         params: Iterable[nn.parameter.Parameter],
         lr: float = 1e-3,
-        betas: Tuple[float, float] = (0.9, 0.999),
+        betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-6,
         weight_decay: float = 0.0,
         correct_bias: bool = True,
@@ -186,7 +179,7 @@ class zigzaglora(Optimizer):
         self,
         params: Iterable[nn.parameter.Parameter],
         lr: float = 1e-3,
-        betas: Tuple[float, float] = (0.9, 0.999),
+        betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-6,
         weight_decay: float = 0.0,
         correct_bias: bool = True,
@@ -222,7 +215,7 @@ class zigzaglora(Optimizer):
             self.zigzag = "zag"
         elif self.zigzag == "zag":
             self.zigzag = "zig"
-    
+
     @torch.no_grad()
     def step(self, closure: Callable = None):
         """
@@ -264,7 +257,7 @@ class zigzaglora(Optimizer):
                 # param_list -> [A,B]
                 # param_list[0] -> A
                 # param_list[1] -> B
-                
+
                 state = self.state[name]
                 # State initialization
                 if len(state) == 0:
@@ -294,7 +287,7 @@ class zigzaglora(Optimizer):
                         delta = 1e-8
 
                         # computing the inverse matrix
-                        
+
                         AA_T = A @ A.T
                         AA_T_inv = torch.linalg.pinv(
                             AA_T + delta * torch.eye(A.shape[0]).to(A.device)
@@ -331,7 +324,7 @@ class zigzaglora(Optimizer):
                         delta = 1e-8
 
                         # computing the inverse matrix
-                        
+
                         B_TB = B.T @ B
                         B_TB_inv = torch.linalg.pinv(B_TB + delta * torch.eye(B.shape[1]).to(B.device))
 
@@ -343,7 +336,7 @@ class zigzaglora(Optimizer):
                         exp_avg_A, exp_avg_sq_A = state["exp_avg_A"], state["exp_avg_sq_A"]
                         beta1, beta2 = group["betas"]
                         state["step"] += 1
-                        
+
                         exp_avg_A.mul_(beta1).add_(grad_A, alpha=(1.0 - beta1))
                         exp_avg_sq_A.mul_(beta2).addcmul_(grad_A, grad_A, value=1.0 - beta2)
 

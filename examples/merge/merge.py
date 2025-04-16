@@ -1,17 +1,11 @@
-import os
 import tempfile
-import shutil
 
-import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
 
 from llmtoolkit import (
-    infly_evaluate,
-    safe_dict2file,
     print_rank_0,
-    prune_magnitude,
 )
+from peft import PeftModel
 
 
 def merge(

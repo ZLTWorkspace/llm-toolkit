@@ -1,7 +1,7 @@
-import os
 import argparse
-from typing import Optional, Tuple
+import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 import transformers
 
@@ -356,7 +356,7 @@ class GenerationArguments:
     no_repeat_ngram_size: Optional[int] = field(default=0)
 
 
-def get_args() -> Tuple[ModelArguments, DataArguments, TrainingArguments]:
+def get_args() -> tuple[ModelArguments, DataArguments, TrainingArguments]:
     hfparser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments, GenerationArguments)
     )

@@ -1,13 +1,13 @@
 import os
-from typing import Dict
 
 import torch
 import transformers
 from transformers import (
-    AutoTokenizer,
     AutoModelForCausalLM,
+    AutoTokenizer,
     BitsAndBytesConfig,
 )
+
 from peft import (
     PeftModel,
 )
@@ -16,10 +16,10 @@ from .sparse import (
     apply_sparse,
 )
 from .utils import (
-    print_rank_0,
-    is_ipex_available,
-    rank_0,
     create_timestamp,
+    is_ipex_available,
+    print_rank_0,
+    rank_0,
 )
 
 
@@ -30,8 +30,9 @@ def resize_base_model_and_replace_lmhead_embed_tokens(
     """
     TODO: Copy all the files from old dir to new dir.
     """
-    import tempfile
     import json
+    import tempfile
+
     from safetensors.torch import load_file, save_file
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,7 +43,7 @@ def resize_base_model_and_replace_lmhead_embed_tokens(
     ).to(device)
     adapter_model = load_file(f"{peft_model_name_or_path}/adapter_model.safetensors")
     with open(
-        f"{peft_model_name_or_path}/adapter_config.json", "r", encoding="utf-8"
+        f"{peft_model_name_or_path}/adapter_config.json", encoding="utf-8"
     ) as file:
         adapter_config = json.load(file)
 
@@ -271,7 +272,7 @@ def flexible_load(args):
     # add special tokens
     # 1. add pad_token if pad_token is None, as unk_token or eos_token if unk_token is None
     # 2. add unk_token if unk_token is None, as pad_token or eos_token if pad_token is None
-    special_tokens_dict = dict()
+    special_tokens_dict = {}
     if tokenizer.pad_token is None:
         special_tokens_dict["pad_token"] = (
             tokenizer.unk_token
@@ -309,7 +310,7 @@ def flexible_load(args):
 
 
 def smart_tokenizer_and_embedding_resize(
-    special_tokens_dict: Dict,
+    special_tokens_dict: dict,
     tokenizer: transformers.PreTrainedTokenizer,
     model: transformers.PreTrainedModel,
 ):

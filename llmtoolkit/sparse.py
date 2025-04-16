@@ -1,14 +1,12 @@
 import copy
-from dataclasses import dataclass, field
 
+import bitsandbytes as bnb
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
+from bitsandbytes.functional import dequantize_4bit, quantize_4bit
+
 import peft
 from peft import PeftModel
-from typing import Dict, List
-import bitsandbytes as bnb
-from bitsandbytes.functional import quantize_4bit, dequantize_4bit
 
 from .utils import (
     print_rank_0,
@@ -193,7 +191,7 @@ def decompositionW(W, r, dtype, transpose_for_linear_weight = True):
     # Y_opt = Sigma_r^(1/2) * V_r^T. Note: V_r^T is given by Vh_r.
     X_opt = U_r @ Sigma_r_half
     Y_opt = Sigma_r_half @ Vh_r
-    
+
     if transpose_for_linear_weight:
         return X_opt.T.to(dtype=dtype), Y_opt.T.to(dtype=dtype)
     else:
@@ -206,11 +204,11 @@ def decompositionW2LR(W:torch.Tensor, r:int, dtype:torch.dtype):
     # we decompose W into L(m,r) and R(r,n)
     # 1. if W is a Tensor, and no transpose_for_linear_weight, return L(m,r), R(r,n)
     # 2. if W is a Tensor, and transpose_for_linear_weight, return L(m,r).T, R(r,n).T
-    # 3. if W is from a linear.weight, and no transpose_for_linear_weight, return 
-    # 4. if W is from a linear.weight, and transpose_for_linear_weight, return 
+    # 3. if W is from a linear.weight, and no transpose_for_linear_weight, return
+    # 4. if W is from a linear.weight, and transpose_for_linear_weight, return
     # note if W is from a linear.weight, it should has shape (out_features,in_features), not (in_features,out_features)
     # we decompose W into L(W.shape[0],r) and R(r,W.shape[1])
-    # 
+    #
     assert len(W.shape) == 2
     assert r in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
 
@@ -247,7 +245,7 @@ def prune_magnitude(
     offload=True,
     sparse_preserve_accuracy=False,
     sparse_prune_largest=False,
-) -> List:
+) -> list:
     if sparse_prune_largest and not sparse_preserve_accuracy:
         print_rank_0(
             "Warning: prune_largest is True, but sparse_preserve_accuracy is False. This may cause accuracy drop."

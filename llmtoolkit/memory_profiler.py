@@ -87,9 +87,9 @@ def export_memory_timeline_html(
 
     try:
         fig.savefig(path.replace(".html", ".png"))
-    except:
+    except Exception as e:
         print_rank_0(
-            "Memory overhead cannot be saved into .png (path is unspecified)! HTML is not impacted."
+            f"Memory overhead cannot be saved into .png (path is unspecified) due to {e}! HTML is not impacted."
         )
 
     with open(tmpfile.name, "rb") as tmp:

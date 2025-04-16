@@ -1,25 +1,26 @@
 import os
-from os.path import exists, join, isdir
-from typing import Dict, Union, Optional
+from os.path import exists, isdir, join
+from typing import Optional
 
+import bitsandbytes as bnb
 import torch
 import transformers
 from transformers import (
-    AutoTokenizer,
     AutoModelForCausalLM,
+    AutoTokenizer,
     BitsAndBytesConfig,
 )
 from transformers.pytorch_utils import Conv1D
-import bitsandbytes as bnb
+
 from peft import (
-    prepare_model_for_kbit_training,
-    LoraConfig,
     AdaLoraConfig,
-    VeraConfig,
     EvaConfig,
+    LoraConfig,
     PrefixTuningConfig,
     PromptTuningConfig,
+    VeraConfig,
     get_peft_model,
+    prepare_model_for_kbit_training,
 )
 from peft.tuners.lora import LoraLayer
 
@@ -28,13 +29,10 @@ from .config import (
     QuantConfig,
 )
 from .utils import (
-    print_rank_0,
     is_ipex_available,
+    print_rank_0,
     require_lib,
     timeit,
-)
-from .sparse import (
-    prune_magnitude,
 )
 
 
@@ -273,7 +271,7 @@ def get_accelerate_model(
     # TODO: check if left padding will cause any issues
     tokenizer.padding_side = "left"
 
-    special_tokens_dict = dict()
+    special_tokens_dict = {}
     if tokenizer.pad_token is None:
         special_tokens_dict["pad_token"] = "<|reserved_special_token_100|>"
     if tokenizer.eos_token is None:
@@ -358,7 +356,7 @@ def print_trainable_parameters(model, debug=False):
 
 
 def smart_tokenizer_and_embedding_resize(
-    special_tokens_dict: Dict,
+    special_tokens_dict: dict,
     tokenizer: transformers.PreTrainedTokenizer,
     model: transformers.PreTrainedModel,
 ):

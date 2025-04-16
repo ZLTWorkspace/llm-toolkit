@@ -1,18 +1,17 @@
 import os
-
-from enum import Enum
-from typing import Dict, List
-from itertools import combinations, product
 from collections import Counter
+from itertools import combinations, product
 
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
 from InquirerPy.validator import PathValidator
 
 from .utils import (
+    ExplicitEnum,
     print_rank_0,
     run_once,
 )
+
 
 os.environ["INQUIRERPY_STYLE_POINTER"] = "#82f24a"
 os.environ["INQUIRERPY_STYLE_ANSWER"] = "#82f24a"
@@ -32,18 +31,6 @@ def print_navigation():
         Ctrl+A  select all
         """
     )
-
-
-class ExplicitEnum(str, Enum):
-    """
-    from huggingface transformers
-    """
-
-    @classmethod
-    def _missing_(cls, value):
-        raise ValueError(
-            f"{value} is not a valid {cls.__name__}, please select one of {list(cls._value2member_map_.keys())}"
-        )
 
 
 class ConfigType(ExplicitEnum):
@@ -218,7 +205,7 @@ peftAction = CheckboxAction(
 
 
 class SerialAction:
-    def __init__(self, actions: List[Action]) -> None:
+    def __init__(self, actions: list[Action]) -> None:
         self.actions = []
         for i in actions:
             self.actions.append(i)
@@ -231,7 +218,7 @@ class SerialAction:
         return results
 
 
-def get_gpu_candidate(n_gpus: int) -> List:
+def get_gpu_candidate(n_gpus: int) -> list:
     candidates = []
     iter = 1
     while iter <= n_gpus:
@@ -267,16 +254,16 @@ key2cmd = {
 
 
 class BenchmarkConfig:
-    def __init__(self, config: Dict = None) -> None:
+    def __init__(self, config: dict = None) -> None:
         self.config = config
 
     def get_optimization_techniques_cmd(
-        self, config: Dict, optimization_techniques: List
+        self, config: dict, optimization_techniques: list
     ):
         cmds = []
         combos = []
 
-        if config[ConfigType.ALLOW_MIX] == False:
+        if not config[ConfigType.ALLOW_MIX]:
             cmds = [key2cmd[i] for i in optimization_techniques]
             return cmds
 
@@ -289,7 +276,7 @@ class BenchmarkConfig:
             cmds.append(" ".join(optimization_techniques_cmd_combo))
         return cmds
 
-    def mix_rules(self, combo: List) -> bool:
+    def mix_rules(self, combo: list) -> bool:
         counts = Counter(combo)
 
         if (
@@ -309,10 +296,10 @@ class BenchmarkConfig:
 
         return True
 
-    def sweep(self, config: Dict = None):
-        if config == None:
+    def sweep(self, config: dict = None):
+        if config is None:
             config = self.config
-        if config == None:
+        if config is None:
             return ValueError("In sweep, config must be initialized.")
 
         cmds = []

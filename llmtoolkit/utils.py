@@ -1,21 +1,26 @@
-import os
-import gc
-import json
-import time
-import threading
-import importlib
 import datetime
-from importlib import metadata
 import functools
-from functools import wraps
+import gc
+import importlib
+import json
+import os
+import threading
+import time
 import warnings
-from typing import List
-from packaging import version
 from collections import Counter
-import matplotlib.pyplot as plt
+from enum import Enum
+from functools import wraps
+from importlib import metadata
 
+import matplotlib.pyplot as plt
 import torch
-from pynvml import *
+from packaging import version
+from pynvml import (
+    nvmlDeviceGetHandleByIndex,
+    nvmlDeviceGetMemoryInfo,
+    nvmlInit,
+    nvmlShutdown,
+)
 
 
 def deprecated(func):
@@ -27,7 +32,7 @@ def deprecated(func):
     def new_func(*args, **kwargs):
         warnings.simplefilter("always", DeprecationWarning)  # turn off filter
         warnings.warn(
-            "Call to deprecated function {}.".format(func.__name__),
+            f"Call to deprecated function {func.__name__}.",
             category=DeprecationWarning,
             stacklevel=2,
         )
@@ -102,7 +107,7 @@ def safe_dict2file(dictionary: dict, filename: str, overwrite: bool = False):
 
 
 @rank_0
-def safe_list2file(source: List, filename: str, overwrite: bool = False):
+def safe_list2file(source: list, filename: str, overwrite: bool = False):
     lock = threading.Lock()
     with lock:
         directory = os.path.dirname(filename)
@@ -117,7 +122,7 @@ def safe_list2file(source: List, filename: str, overwrite: bool = False):
 def safe_readjson(filename):
     lock = threading.Lock()
     with lock:
-        with open(filename, "r") as json_file:
+        with open(filename) as json_file:
             d = json.load(json_file)
     return d
 
@@ -181,6 +186,18 @@ def is_ipex_available():
         )
         return False
     return True
+
+
+class ExplicitEnum(str, Enum):
+    """
+    from huggingface transformers
+    """
+
+    @classmethod
+    def _missing_(cls, value):
+        raise ValueError(
+            f"{value} is not a valid {cls.__name__}, please select one of {list(cls._value2member_map_.keys())}"
+        )
 
 
 class hardware_info:

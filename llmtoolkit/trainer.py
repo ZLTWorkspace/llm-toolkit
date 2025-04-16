@@ -1,8 +1,7 @@
-from typing import Any, Dict, Union
+from typing import Any, Union
 
 import torch
 from torch import nn
-
 from transformers import (
     Seq2SeqTrainer,
 )
@@ -34,7 +33,7 @@ class BaseSeq2SeqTrainer(Seq2SeqTrainer):
     def training_step(
         self,
         model: nn.Module,
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs: dict[str, Union[torch.Tensor, Any]],
         num_items_in_batch,
     ) -> torch.Tensor:
         self.step_seq.append(inputs["input_ids"].numel())
@@ -99,8 +98,9 @@ class Seq2SeqTrainer_optim(BaseSeq2SeqTrainer):
             self.optimizer = zigzaglora(param_groups)
         elif self.adamw == "loraplus":
             print_rank_0("Creating loraplus.")
-            from peft.optimizers import create_loraplus_optimizer
             from transformers.optimization import AdamW
+
+            from peft.optimizers import create_loraplus_optimizer
 
             self.optimizer = create_loraplus_optimizer(
                 model=self.model,

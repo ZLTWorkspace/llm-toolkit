@@ -1,34 +1,33 @@
 import os
 from pathlib import Path
-from typing import Dict, List
 
 from .sweep_config import (
-    print_navigation,
-    get_path_SerialAction,
-    get_n_gpus_Action,
+    BenchmarkConfig,
+    ConfigType,
     SerialAction,
-    taskAction,
-    modelAction,
-    optimization_techniquesAction,
+    TaskType,
     allow_mixAction,
     batchsizeAction,
-    sequence_lengthAction,
+    get_n_gpus_Action,
+    get_path_SerialAction,
+    modelAction,
+    optimization_techniquesAction,
     peftAction,
-    TaskType,
-    ConfigType,
-    BenchmarkConfig,
+    print_navigation,
+    sequence_lengthAction,
+    taskAction,
 )
 from .utils import (
-    safe_list2file,
-    safe_dict2file,
-    safe_readjson,
+    create_timestamp,
     hardware_info,
     print_rank_0,
-    create_timestamp,
+    safe_dict2file,
+    safe_list2file,
+    safe_readjson,
 )
 
 
-def save_cmds_config(cmds: List, config: Dict):
+def save_cmds_config(cmds: list, config: dict):
     formatted_time = create_timestamp()
     os.makedirs(f"benchmark_{formatted_time}")
     print_rank_0(

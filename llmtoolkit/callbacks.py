@@ -1,7 +1,7 @@
 import os
 import time
-import numpy as np
 
+import numpy as np
 import torch
 import transformers
 from accelerate import Accelerator
@@ -10,13 +10,13 @@ from .sparse import (
     prune_magnitude,
 )
 from .utils import (
-    safe_dict2file,
     get_world_size,
+    gsi,
+    plot_xy,
     print_rank_0,
     rank_0,
-    plot_xy,
+    safe_dict2file,
     save_fig,
-    gsi,
 )
 
 

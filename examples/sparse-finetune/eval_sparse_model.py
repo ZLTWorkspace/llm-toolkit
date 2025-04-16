@@ -1,14 +1,9 @@
-import os
-import json
-import torch
-import transformers
-from transformers import PretrainedConfig
 
 from llmtoolkit import (
-    print_rank_0,
-    load,
     check_sparsity,
     infly_evaluate,
+    load,
+    print_rank_0,
     safe_dict2file,
 )
 

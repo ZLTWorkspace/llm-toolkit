@@ -1,26 +1,24 @@
-from tqdm.auto import tqdm
+import argparse
 import math
 import os
-import argparse
+
 import matplotlib.pyplot as plt
-
 import torch
-from torch.utils.data import DataLoader
-
 import transformers
-from transformers import (
-    set_seed,
-    get_scheduler,
-)
-
 from accelerate import Accelerator
 from accelerate.utils import DistributedType
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+from transformers import (
+    get_scheduler,
+    set_seed,
+)
 
 from .arguments import (
-    ModelArguments,
     DataArguments,
-    TrainingArguments,
     GenerationArguments,
+    ModelArguments,
+    TrainingArguments,
     get_unique_key,
 )
 from .dataset import (
@@ -32,9 +30,8 @@ from .model import (
     print_trainable_parameters,
 )
 from .utils import (
-    print_rank_0,
-    hardware_info,
     get_rank,
+    print_rank_0,
 )
 
 
@@ -58,9 +55,7 @@ class MemoryTracer:
     def trace(self):
         if not self.enable_trace:
             return
-        mem = round(
-            torch.cuda.memory_allocated(self.device_rank) / 1024 / 1024 / 1024, 3
-        )
+        mem = round(torch.cuda.memory_allocated(self.device_rank) / 1024 / 1024 / 1024, 3)
         self.memory_allocated.append(mem)
         self.memory.append(round(mem - sum(self.memory), 3))
 
@@ -98,34 +93,24 @@ def train_no_trainer():
     r"""
     We first init the args, this involves
     1. mapping all input args to the argument dataclass
-    2. init some fields in the args after the post-init  
+    2. init some fields in the args after the post-init
     """
 
-    hfparser = transformers.HfArgumentParser(
-        (ModelArguments, DataArguments, TrainingArguments, GenerationArguments)
+    hfparser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments, GenerationArguments))
+    model_args, data_args, training_args, generation_args, extra_args = hfparser.parse_args_into_dataclasses(
+        return_remaining_strings=True
     )
-    model_args, data_args, training_args, generation_args, extra_args = (
-        hfparser.parse_args_into_dataclasses(return_remaining_strings=True)
-    )
-    training_args.generation_config = transformers.GenerationConfig(
-        **vars(generation_args)
-    )
-    args = argparse.Namespace(
-        **vars(model_args), **vars(data_args), **vars(training_args)
-    )
+    training_args.generation_config = transformers.GenerationConfig(**vars(generation_args))
+    args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
     # run_name is post inited in Transformers: if self.run_name is None: self.run_name = self.output_dir
     if args.run_name == args.output_dir:
-        print_rank_0(
-            f"Set run_name from '{args.output_dir}' to '{get_unique_key(args)}'"
-        )
+        print_rank_0(f"Set run_name from '{args.output_dir}' to '{get_unique_key(args)}'")
         args.run_name = get_unique_key(args)
         training_args.run_name = get_unique_key(args)
 
     if args.output_dir == "default_output":
-        print_rank_0(
-            f"Set output_dir from 'default_output' to '{get_unique_key(args)}'"
-        )
+        print_rank_0(f"Set output_dir from 'default_output' to '{get_unique_key(args)}'")
         args.output_dir = get_unique_key(args)
         training_args.output_dir = get_unique_key(args)
 
@@ -143,11 +128,7 @@ def train_no_trainer():
     else:
         with_tracking = False
 
-    accelerator = (
-        Accelerator(log_with=args.report_to, project_dir=args.output_dir)
-        if with_tracking
-        else Accelerator()
-    )
+    accelerator = Accelerator(log_with=args.report_to, project_dir=args.output_dir) if with_tracking else Accelerator()
     memory_tracer = MemoryTracer(args)
 
     memory_tracer.trace()
@@ -198,19 +179,11 @@ def train_no_trainer():
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
         {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if not any(nd in n for nd in no_decay)
-            ],
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
             "weight_decay": args.weight_decay,
         },
         {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if any(nd in n for nd in no_decay)
-            ],
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
             "weight_decay": 0.0,
         },
     ]
@@ -230,9 +203,7 @@ def train_no_trainer():
     """
 
     overrode_max_steps = False
-    num_update_steps_per_epoch = math.ceil(
-        len(train_dataloader) / args.gradient_accumulation_steps
-    )
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if args.max_steps is None or args.max_steps <= 0:
         args.max_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_steps = True
@@ -244,18 +215,14 @@ def train_no_trainer():
         num_training_steps=args.max_steps,
     )
 
-    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = (
-        accelerator.prepare(
-            model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
-        )
+    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
     )
     print_rank_0("model, optimizer are wraped via accelerate loaded")
 
     memory_tracer.trace()
 
-    num_update_steps_per_epoch = math.ceil(
-        len(train_dataloader) / args.gradient_accumulation_steps
-    )
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if overrode_max_steps:
         args.max_steps = args.num_train_epochs * num_update_steps_per_epoch
     args.num_train_epochs = math.ceil(args.max_steps / num_update_steps_per_epoch)
@@ -280,37 +247,24 @@ def train_no_trainer():
     """
     if args.do_train:
         total_batch_size = (
-            args.per_device_train_batch_size
-            * accelerator.num_processes
-            * args.gradient_accumulation_steps
+            args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
         )
 
         print_rank_0("***** Running training *****")
         print_rank_0(f"  Num examples = {len(data_module['train_dataset'])}")
         print_rank_0(f"  Num Epochs = {args.num_train_epochs}")
-        print_rank_0(
-            f"  Instantaneous batch size per device = {args.per_device_train_batch_size}"
-        )
-        print_rank_0(
-            f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}"
-        )
-        print_rank_0(
-            f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}"
-        )
+        print_rank_0(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
+        print_rank_0(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+        print_rank_0(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
         print_rank_0(f"  Total optimization steps = {args.max_steps}")
         # Only show the progress bar once on each machine.
-        progress_bar = tqdm(
-            range(args.max_steps), disable=not accelerator.is_local_main_process
-        )
+        progress_bar = tqdm(range(args.max_steps), disable=not accelerator.is_local_main_process)
         completed_steps = 0
         starting_epoch = 0
 
         # Potentially load in the weights and states from a previous save
         if args.resume_from_checkpoint:
-            if (
-                args.resume_from_checkpoint is not None
-                or args.resume_from_checkpoint != ""
-            ):
+            if args.resume_from_checkpoint is not None or args.resume_from_checkpoint != "":
                 checkpoint_path = args.resume_from_checkpoint
                 path = os.path.basename(args.resume_from_checkpoint)
             else:
@@ -333,10 +287,7 @@ def train_no_trainer():
                 completed_steps = starting_epoch * num_update_steps_per_epoch
             else:
                 # need to multiply `gradient_accumulation_steps` to reflect real steps
-                resume_step = (
-                    int(training_difference.replace("step_", ""))
-                    * args.gradient_accumulation_steps
-                )
+                resume_step = int(training_difference.replace("step_", "")) * args.gradient_accumulation_steps
                 starting_epoch = resume_step // len(train_dataloader)
                 completed_steps = resume_step // args.gradient_accumulation_steps
                 resume_step -= starting_epoch * len(train_dataloader)
@@ -348,15 +299,9 @@ def train_no_trainer():
             model.train()
             if with_tracking:
                 total_loss = 0
-            if (
-                args.resume_from_checkpoint
-                and epoch == starting_epoch
-                and resume_step is not None
-            ):
+            if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
                 # We skip the first `n` batches in the dataloader when resuming from a checkpoint
-                active_dataloader = accelerator.skip_first_batches(
-                    train_dataloader, resume_step
-                )
+                active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
             else:
                 active_dataloader = train_dataloader
             for step, batch in enumerate(active_dataloader):
@@ -373,19 +318,14 @@ def train_no_trainer():
 
                 memory_tracer.trace()
 
-                if (
-                    step % args.gradient_accumulation_steps == 0
-                    or step == len(train_dataloader) - 1
-                ):
+                if step % args.gradient_accumulation_steps == 0 or step == len(train_dataloader) - 1:
                     optimizer.step()
                     lr_scheduler.step()
                     optimizer.zero_grad()
                     progress_bar.update(1)
                     completed_steps += 1
                     if accelerator.is_local_main_process:
-                        progress_bar.write(
-                            f"Step-{step} training loss: {loss.detach().float()}"
-                        )
+                        progress_bar.write(f"Step-{step} training loss: {loss.detach().float()}")
                     memory_tracer.trace()
 
                 if should_save(step):

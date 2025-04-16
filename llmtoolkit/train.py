@@ -1,29 +1,32 @@
-import os
 import json
+import os
 
 import torch
 import transformers
+from accelerate.utils import DistributedType
 from transformers import (
     set_seed,
 )
-from accelerate.utils import DistributedType
+
 from peft import PeftModel
 
 from .arguments import (
-    ModelArguments,
     DataArguments,
+    ModelArguments,
     TrainingArguments,
     get_unique_key,
 )
 from .callbacks import (
+    DynamicSparseCallback,
     EmptycacheCallback,
     PT_ProfCallback,
     StepInfoCallback,
-    DynamicSparseCallback,
-    StaticSparseCallback,
 )
 from .dataset import (
     build_data_module,
+)
+from .memory_profiler import (
+    export_memory_timeline_html,
 )
 from .model import (
     get_accelerate_model,
@@ -36,9 +39,6 @@ from .trainer import (
 )
 from .utils import (
     print_rank_0,
-)
-from .memory_profiler import (
-    export_memory_timeline_html,
 )
 
 
@@ -82,10 +82,8 @@ def train(
             data_collator=data_collator,
         )
 
-    try:
+    if hasattr(model, "hf_device_map"):
         print_rank_0(f"device map: {model.hf_device_map}")
-    except:
-        pass
 
     # Callbacks
     if training_args.clean_cache:

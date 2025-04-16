@@ -1,26 +1,27 @@
 import os
 import re
-from tqdm import tqdm
 from abc import ABC, abstractmethod
 
 import lm_eval
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from .utils import (
-    print_rank_0,
-    safe_dict2file,
-    safe_list2file,
-    get_rank,
-    create_timestamp,
-    require_lib,
-    gsi,
+from .dataset import (
+    build_data_module,
 )
 from .inference import (
     vllm_inference,
 )
-from .dataset import (
-    build_data_module,
+from .utils import (
+    create_timestamp,
+    get_rank,
+    gsi,
+    print_rank_0,
+    require_lib,
+    safe_dict2file,
+    safe_list2file,
 )
+
 
 """
 Note:
@@ -126,7 +127,7 @@ def hf_lm_eval(
 """
 We also provide some other custom eval fuctions.
 
-The evaluate data should be the format below. 
+The evaluate data should be the format below.
 data = [
     {"prompt": "Q1", "golden": "This is the correct answer", "predicate": "This is the predicate answer"},
     {"prompt": "Q2", "golden": "This is the correct answer", "predicate": "This is the predicate answer"},
@@ -232,7 +233,7 @@ def infly_evaluate(
     eval_dataset = build_data_module(tokenizer, task)["eval_dataset"]
     prompts = list(eval_dataset["input"])
     prompt_to_golden = {item["input"]: item["output"] for item in eval_dataset}
-    
+
     # TODO: check if 1024 for mmlu is enough
     max_tokens = {
         "mmlu": 2048,

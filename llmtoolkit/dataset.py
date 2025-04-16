@@ -1,37 +1,37 @@
 import copy
-import os
-import re
-from typing import Dict, Sequence
-from dataclasses import dataclass
-import pandas as pd
 import random
+from collections.abc import Sequence
+from dataclasses import dataclass
 
+import pandas as pd
 import torch
 import transformers
 from torch.nn.utils.rnn import pad_sequence
+
 import datasets
-from datasets import load_dataset, Dataset
+from datasets import Dataset, load_dataset
 
 from .arguments import (
     DataArguments,
 )
 from .utils import (
-    print_rank_0,
     gsi,
+    print_rank_0,
 )
+
 
 IGNORE_INDEX = -100
 
 
 @dataclass
-class DataCollatorForCausalLM(object):
+class DataCollatorForCausalLM:
     tokenizer: transformers.PreTrainedTokenizer
     source_max_len: int
     target_max_len: int
     train_on_source: bool
     hard_padding: bool
 
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+    def __call__(self, instances: Sequence[dict]) -> dict[str, torch.Tensor]:
         # Extract elements
         sources = [example["input"] for example in instances]
         targets = [example["output"] for example in instances]
@@ -59,20 +59,13 @@ class DataCollatorForCausalLM(object):
             input_ids.append(torch.tensor(tokenized_source + tokenized_target))
             if not self.train_on_source:
                 labels.append(
-                    torch.tensor(
-                        [IGNORE_INDEX for _ in range(len(tokenized_source))]
-                        + copy.deepcopy(tokenized_target)
-                    )
+                    torch.tensor([IGNORE_INDEX for _ in range(len(tokenized_source))] + copy.deepcopy(tokenized_target))
                 )
             else:
-                labels.append(
-                    torch.tensor(copy.deepcopy(tokenized_source + tokenized_target))
-                )
+                labels.append(torch.tensor(copy.deepcopy(tokenized_source + tokenized_target)))
 
         # Apply padding
-        input_ids = pad_sequence(
-            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
-        )
+        input_ids = pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
         labels = pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
 
         data_dict = {
@@ -93,9 +86,7 @@ class SFTPrompt:
 
     question: str = "Question: {question}\n\nAnswer: "
     answer: str = "{answer}\n\n"
-    instruction_input: str = (
-        "Instruction: {instruction}\n\nInput: {input}\n\nResponse: "
-    )
+    instruction_input: str = "Instruction: {instruction}\n\nInput: {input}\n\nResponse: "
     instruction: str = "Instruction: {instruction}\n\nResponse: "
 
 
@@ -124,14 +115,12 @@ default_template = """
 
 
 def apply_chat_template_to_train(
-    chat: Sequence[Dict[str, str]],
+    chat: Sequence[dict[str, str]],
     tokenizer: transformers.PreTrainedTokenizer,
 ):
     # todo: check if the chat is system/user/assitant format
     if tokenizer.chat_template:
-        _source = tokenizer.apply_chat_template(
-            chat[:-1], tokenize=False, add_generation_prompt=True
-        )
+        _source = tokenizer.apply_chat_template(chat[:-1], tokenize=False, add_generation_prompt=True)
     else:
         _source = tokenizer.apply_chat_template(
             chat[:-1],
@@ -238,9 +227,7 @@ class PrepareDataset:
             for label, choice in zip(labels, example["choices"]):
                 input_str += f"{label}. {choice}\n"
             input_str += "\nAnswer: "
-            output_str = (
-                f"{labels[example['answer']]}. {example['choices'][example['answer']]}"
-            )
+            output_str = f"{labels[example['answer']]}. {example['choices'][example['answer']]}"
             return input_str, output_str
 
         def preprocess_test():
@@ -260,9 +247,7 @@ class PrepareDataset:
                 _source, _target = apply_chat_template_to_train(chat, self.tokenizer)
                 return {"input": _source, "output": _target}
 
-            dataset["test"] = dataset["test"].map(
-                _preprocess_example, num_proc=gsi.info["n_cpus"]
-            )
+            dataset["test"] = dataset["test"].map(_preprocess_example, num_proc=gsi.info["n_cpus"])
 
         def preprocess_train():
             def _preprocess_example(example):
@@ -276,9 +261,7 @@ class PrepareDataset:
 
                 return {"input": _source, "output": _target}
 
-            dataset["train"] = dataset["train"].map(
-                _preprocess_example, num_proc=gsi.info["n_cpus"]
-            )
+            dataset["train"] = dataset["train"].map(_preprocess_example, num_proc=gsi.info["n_cpus"])
 
         preprocess_train()
         preprocess_test()
@@ -301,9 +284,7 @@ class PrepareDataset:
                     instruction=example["instruction"], input=example["input"]
                 )
             else:
-                input_str = SFTPrompt.instruction.format(
-                    instruction=example["instruction"]
-                )
+                input_str = SFTPrompt.instruction.format(instruction=example["instruction"])
             output_str = example["output"]
             chat = [
                 {"role": "system", "content": system_message},
@@ -427,15 +408,11 @@ class PrepareDataset:
         dataset = load_dataset("allenai/tulu-3-sft-mixture")
 
         if not self.tokenizer.chat_template:
-            raise NotImplementedError(
-                "Tulu v3 is a chat dataset, thus a chat template is required."
-            )
+            raise NotImplementedError("Tulu v3 is a chat dataset, thus a chat template is required.")
 
         def _preprocess_doc(example):
             input_str = example["messages"]
-            _source = self.tokenizer.apply_chat_template(
-                input_str, tokenize=False, add_generation_prompt=False
-            )
+            _source = self.tokenizer.apply_chat_template(input_str, tokenize=False, add_generation_prompt=False)
             return {"input": _source, "output": ""}
 
         return dataset.map(_preprocess_doc, num_proc=gsi.info["n_cpus"])
@@ -539,7 +516,7 @@ def build_data_module(
     tokenizer: transformers.PreTrainedTokenizer,
     dataset_name_or_path,
     args: DataArguments = None,
-) -> Dict:
+) -> dict:
     preparedataset = PrepareDataset(tokenizer=tokenizer)
 
     if args is None:
@@ -556,35 +533,26 @@ def build_data_module(
         print_rank_0(
             f"Splitting train dataset in train and validation according to `eval_dataset_size`({args.eval_dataset_size})"
         )
-        dataset = dataset["train"].train_test_split(
-            test_size=args.eval_dataset_size, shuffle=True, seed=42
-        )
+        dataset = dataset["train"].train_test_split(test_size=args.eval_dataset_size, shuffle=True, seed=42)
         eval_dataset = dataset["test"]
     if args.max_eval_samples is not None and len(eval_dataset) > args.max_eval_samples:
         eval_dataset = eval_dataset.select(range(args.max_eval_samples))
 
     train_dataset = dataset["train"]
-    if (
-        args.max_train_samples is not None
-        and len(train_dataset) > args.max_train_samples
-    ):
+    if args.max_train_samples is not None and len(train_dataset) > args.max_train_samples:
         train_dataset = train_dataset.select(range(args.max_train_samples))
 
     train_dataset = train_dataset.map(
         lambda x: {
             "input_length": len(tokenizer(x["input"])["input_ids"]),
             "output_length": len(tokenizer(x["output"])["input_ids"]),
-            "length": len(tokenizer(x["input"])["input_ids"])
-            + len(tokenizer(x["output"])["input_ids"]),
+            "length": len(tokenizer(x["input"])["input_ids"]) + len(tokenizer(x["output"])["input_ids"]),
         },
         num_proc=gsi.info["n_cpus"],
     )
     longest_sequence = max(train_dataset, key=lambda x: x["length"])
     longest_sequence_length = longest_sequence["length"]
-    if (
-        longest_sequence_length >= args.source_max_len + args.target_max_len
-        and not args.hard_padding
-    ):
+    if longest_sequence_length >= args.source_max_len + args.target_max_len and not args.hard_padding:
         print_rank_0(
             f"WARNING: You choose not to pad all sequences to the max same length (max_input_token = source_max_len + target_max_len = {args.source_max_len + args.target_max_len}) since hard_padding is False. However, at least 1 sequence in the dataset has exceeded the max length ({longest_sequence_length}), which may ultimately cause OOM during the training. To avoid OOM, try few steps with --hard_padding True before training."
         )
@@ -615,8 +583,7 @@ def build_data_module(
         lambda x: {
             "input_length": len(tokenizer(x["input"])["input_ids"]),
             "output_length": len(tokenizer(x["output"])["input_ids"]),
-            "length": len(tokenizer(x["input"])["input_ids"])
-            + len(tokenizer(x["output"])["input_ids"]),
+            "length": len(tokenizer(x["input"])["input_ids"]) + len(tokenizer(x["output"])["input_ids"]),
         },
         num_proc=gsi.info["n_cpus"],
     )
@@ -639,9 +606,9 @@ def build_data_module(
         train_on_source=args.train_on_source,
         hard_padding=args.hard_padding,
     )
-    return dict(
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        predict_dataset=eval_dataset,
-        data_collator=data_collator,
-    )
+    return {
+        "train_dataset": train_dataset,
+        "eval_dataset": eval_dataset,
+        "predict_dataset": eval_dataset,
+        "data_collator": data_collator,
+    }
