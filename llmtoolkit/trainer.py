@@ -82,6 +82,14 @@ class Seq2SeqTrainer_optim(BaseSeq2SeqTrainer):
         ]
         if self.adamw == "lorafa":
             print_rank_0("Creating AdamW_lorafa.")
+            # # from peft
+            # from peft.optimizers import create_lorafa_optimizer
+            # self.optimizer = create_lorafa_optimizer(
+            #     model=self.model,
+            #     r=lora_rank,
+            #     lora_alpha=lora_alpha,
+            #     lr=self.args.learning_rate,
+            # )
             self.optimizer = AdamW_lorafa(param_groups)
         elif self.adamw == "lorapro":
             print_rank_0("Creating AdamW_lorapro.")
@@ -93,9 +101,17 @@ class Seq2SeqTrainer_optim(BaseSeq2SeqTrainer):
             print_rank_0("Creating loraplus.")
             from peft.optimizers import create_loraplus_optimizer
             from transformers.optimization import AdamW
-            self.optimizer = create_loraplus_optimizer(model = self.model, optimizer_cls=AdamW, lr=param_groups[0]["lr"], loraplus_lr_ratio=16)
+
+            self.optimizer = create_loraplus_optimizer(
+                model=self.model,
+                optimizer_cls=AdamW,
+                lr=param_groups[0]["lr"],
+                loraplus_lr_ratio=16,
+            )
         else:
-            raise ValueError("Seq2SeqTrainer_optim only support AdamW_lorafa, AdamW_lorapro, loraplus.")
+            raise ValueError(
+                "Seq2SeqTrainer_optim only support AdamW_lorafa, AdamW_lorapro, loraplus."
+            )
         self.create_scheduler(
             num_training_steps=num_training_steps, optimizer=self.optimizer
         )
