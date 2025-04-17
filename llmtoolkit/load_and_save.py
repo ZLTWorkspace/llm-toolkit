@@ -2,6 +2,7 @@ import os
 
 import torch
 import transformers
+from accelerate import Accelerator
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -12,6 +13,9 @@ from peft import (
     PeftModel,
 )
 
+from .model import (
+    auto_add_special_tokens,
+)
 from .sparse import (
     apply_sparse,
 )
@@ -116,46 +120,56 @@ def load(
 ):
     """
     Load a language model with optional PEFT adapter and sparse mask.
-
     This function loads a pre-trained causal language model and its tokenizer
     from the given `base_model_name_or_path`. It also supports loading a
     Parameter-Efficient Fine-Tuning (PEFT) adapter from `peft_model_name_or_path`,
     resizing the token embeddings if necessary. Additionally, it allows applying
     a sparse mask from `sparse_named_mask_path` to the model.
 
-    *Note that the quantization and sparse named mask is only applied to the base model*
-
+    Note: quantization and sparse named mask is only applied to the base model
     i.e, quantization(sparse(base_model)) + lora_model
 
     Args:
         base_model_name_or_path (str): Path or name of the base pre-trained model.
         peft_model_name_or_path (str, optional): Path or name of the PEFT adapter model.
             If provided, the adapter is loaded and integrated with the base model.
-        load_in_4bit (bool, optional): Whether to load the model in 4-bit precision
-            for reduced memory usage. Default is False.
+        load_in_4bit (bool, optional): Whether to load the model in 4-bit precision for reduced memory usage.
         sparse_named_mask_path (str, optional): Path to a sparse named mask file.
-            If provided, the mask is applied to the model.
 
     Returns:
         Tuple[torch.nn.Module, transformers.PreTrainedTokenizer]:
-            - The loaded model, with optional PEFT and sparse mask applied.
+            - The loaded model, with optional PEFT and sparse mask applied,
+              automatically distributed on all available GPUs.
             - The tokenizer corresponding to the final model configuration.
     """
-
     if sparse_named_mask_path and not peft_model_name_or_path:
         raise ValueError(
             "Sparse named mask can only be applied to a model with PEFT adapter."
         )
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    accelerator = Accelerator()
+    device = accelerator.device
+
+    # TODO check flash-attn
+    model_kwargs = {}
+    if load_in_4bit:
+        model_kwargs["load_in_4bit"] = True
+    if torch.cuda.is_available():
+        model_kwargs["torch_dtype"] = torch.bfloat16
+
     model = AutoModelForCausalLM.from_pretrained(
-        base_model_name_or_path, load_in_4bit=load_in_4bit
-    ).to(device)
+        base_model_name_or_path, **model_kwargs
+    )
+
     target_tokenizer = AutoTokenizer.from_pretrained(base_model_name_or_path)
+
+    # make sure the special tokens are the same as the base model when training
+    auto_add_special_tokens(model, target_tokenizer)
 
     if peft_model_name_or_path:
         peft_tokenizer = AutoTokenizer.from_pretrained(peft_model_name_or_path)
         if len(target_tokenizer) != len(peft_tokenizer):
-            print_rank_0(
+            print(
                 f"Since the embedding of base model mismatch peft adapter ({len(target_tokenizer)} - {len(peft_tokenizer)}), resizing."
             )
             model.resize_token_embeddings(len(peft_tokenizer))
@@ -163,8 +177,10 @@ def load(
         model = PeftModel.from_pretrained(model, peft_model_name_or_path)
 
     if sparse_named_mask_path:
-        named_mask = torch.load(sparse_named_mask_path)
+        named_mask = torch.load(sparse_named_mask_path, map_location="cpu")
         apply_sparse(model, named_mask)
+
+    model = accelerator.prepare(model)
 
     return model, target_tokenizer
 

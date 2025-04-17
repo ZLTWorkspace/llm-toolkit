@@ -1,11 +1,108 @@
 import torch
+from accelerate import Accelerator
+from tqdm import tqdm
 
+from .load_and_save import (
+    load,
+)
 from .utils import (
+    ExplicitEnum,
     gsi,
     print_rank_0,
     rank_0,
     require_lib,
 )
+
+
+class InferBackend(ExplicitEnum):
+    """
+    InferBackend is a class that defines the backend for inference.
+    """
+
+    TRANSFORMERS = "transformers"
+    VLLM = "vllm"
+    SGLANG = "sglang"
+
+    def __str__(self):
+        return self.value
+
+    @classmethod
+    def choices(cls):
+        return [cls.TRANSFORMERS, cls.VLLM, cls.INFLY]
+
+
+def transformers_inference(
+    prompts: list,
+    model_name_or_path: str,
+    peft_name_or_path: str = None,
+    max_lora_rank: int = 128,
+    max_tokens: int = 1024,
+    load_in_4bit: bool = False,
+    batch_size: int = 1,
+) -> list:
+    model, tokenizer = load(
+        base_model_name_or_path=model_name_or_path,
+        peft_model_name_or_path=peft_name_or_path,
+        load_in_4bit=load_in_4bit,
+    )
+    accelerator = Accelerator()
+    tokenizer.padding_side = "left"
+
+    prompts_with_lengths = [(i, prompt, len(tokenizer.tokenize(prompt))) for i, prompt in enumerate(prompts)]
+    prompts_with_lengths.sort(key=lambda x: x[2])
+    sorted_indices = [x[0] for x in prompts_with_lengths]
+    sorted_prompts = [x[1] for x in prompts_with_lengths]
+
+    all_predictions = [None] * len(prompts)
+
+    print(tokenizer.pad_token_id)
+    print(tokenizer.eos_token_id)
+    print(tokenizer.decode([tokenizer.eos_token_id]))
+
+    num_batches = (len(sorted_prompts) + batch_size - 1) // batch_size
+    for batch_idx in tqdm(range(num_batches), desc="Inference Progress"):
+        if batch_idx % accelerator.num_processes != accelerator.process_index:
+            continue
+
+        start = batch_idx * batch_size
+        end = min(start + batch_size, len(sorted_prompts))
+        batch_prompts = sorted_prompts[start:end]
+
+        encoded_prompts = tokenizer(
+            batch_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(model.device)
+
+        with torch.no_grad():
+            raw_model = getattr(model, "module", model)
+            generated_ids = raw_model.generate(
+                **encoded_prompts,
+                max_new_tokens=max_tokens,
+                top_p=0.0,
+                temperature=0.1,
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
+        input_ids = encoded_prompts["input_ids"]
+        generated_outputs = []
+        for gen_ids, inp_ids in zip(generated_ids, input_ids):
+            input_length = len(inp_ids)
+            generated_outputs.append(gen_ids[input_length:].tolist())
+
+        batch_predictions = tokenizer.batch_decode(generated_outputs)
+        for offset, (input_text, full_output) in enumerate(zip(batch_prompts, batch_predictions)):
+            orig_idx = sorted_indices[start + offset]
+            all_predictions[orig_idx] = {"prompt": input_text, "response": full_output}
+
+    all_predictions = accelerator.gather_for_metrics(all_predictions)
+    if accelerator.is_main_process:
+        predictions = [x for x in all_predictions if x is not None]
+        return predictions
+    else:
+        return None
 
 
 @rank_0
@@ -48,16 +145,6 @@ def single_inference(
 
     return pred_text
 
-def batched_inference(
-    prompts: list,
-    model_name_or_path: str,
-    peft_name_or_path: str = None,
-    max_lora_rank: int = 128,
-    max_tokens: int = 1024,
-    load_in_4bit: bool = False,
-    backend: str = "transformers",
-):
-    pass
 
 def vllm_inference(
     prompts: list,
@@ -94,9 +181,7 @@ def vllm_inference(
         "gpu_memory_utilization": 0.9,
     }
     if load_in_4bit:
-        vllm_kwargs.update(
-            {"quantization": "bitsandbytes", "load_format": "bitsandbytes"}
-        )
+        vllm_kwargs.update({"quantization": "bitsandbytes", "load_format": "bitsandbytes"})
     if peft_name_or_path:
         vllm_kwargs.update({"enable_lora": True, "max_lora_rank": max_lora_rank})
 
@@ -104,15 +189,44 @@ def vllm_inference(
 
     generate_kwargs = {}
     if peft_name_or_path:
-        generate_kwargs["lora_request"] = LoRARequest(
-            peft_name_or_path, 1, peft_name_or_path
-        )
+        generate_kwargs["lora_request"] = LoRARequest(peft_name_or_path, 1, peft_name_or_path)
 
     outputs = llm.generate(prompts, sampling_params, **generate_kwargs)
 
-    results = [
-        {"prompt": output.prompt, "response": output.outputs[0].text}
-        for output in outputs
-    ]
+    results = [{"prompt": output.prompt, "response": output.outputs[0].text} for output in outputs]
 
     return results
+
+
+def batched_inference(
+    prompts: list,
+    model_name_or_path: str,
+    peft_name_or_path: str = None,
+    max_lora_rank: int = 128,
+    max_tokens: int = 1024,
+    load_in_4bit: bool = False,
+    backend: InferBackend = InferBackend.VLLM,
+) -> list:
+    if backend == InferBackend.TRANSFORMERS:
+        return transformers_inference(
+            prompts,
+            model_name_or_path,
+            peft_name_or_path=peft_name_or_path,
+            max_lora_rank=max_lora_rank,
+            max_tokens=max_tokens,
+            load_in_4bit=load_in_4bit,
+        )
+    elif backend == InferBackend.VLLM:
+        return vllm_inference(
+            prompts,
+            model_name_or_path,
+            peft_name_or_path=peft_name_or_path,
+            max_lora_rank=max_lora_rank,
+            max_tokens=max_tokens,
+            load_in_4bit=load_in_4bit,
+        )
+        pass
+    elif backend == InferBackend.SGLANG:
+        raise NotImplementedError("SGLANG backend is not implemented yet.")
+    else:
+        raise ValueError(f"Unsupported backend: {backend}. Supported backends are {InferBackend.choices()}.")

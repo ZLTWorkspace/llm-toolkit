@@ -10,7 +10,8 @@ from .dataset import (
     build_data_module,
 )
 from .inference import (
-    vllm_inference,
+    InferBackend,
+    batched_inference,
 )
 from .utils import (
     create_timestamp,
@@ -219,6 +220,7 @@ def infly_evaluate(
     model_name_or_path,
     peft_name_or_path: str = None,
     load_in_4bit: bool = False,
+    backend: InferBackend = InferBackend.VLLM,
 ) -> float:
     if task == "gsm8k":
         strategy = GSM8KEvaluationStrategy()
@@ -234,15 +236,19 @@ def infly_evaluate(
     prompts = list(eval_dataset["input"])
     prompt_to_golden = {item["input"]: item["output"] for item in eval_dataset}
 
-    # TODO: check if 1024 for mmlu is enough
+    # since the evaluation is based on the keywords in the output
+    # thus we only keep sufficient sequence
     max_tokens = {
-        "mmlu": 2048,
+        "mmlu": 32,
         "gsm8k": 1024,
     }
 
-    results = vllm_inference(
-        prompts, model_name_or_path, peft_name_or_path, load_in_4bit=load_in_4bit, max_tokens=max_tokens.get(task, 1024)
+    results = batched_inference(
+        prompts, model_name_or_path, peft_name_or_path, load_in_4bit=load_in_4bit, max_tokens=max_tokens.get(task, 1024), backend=backend
     )
+
+    if get_rank() != 0 or results is None:
+        return None
 
     inspection = []
     for result in results:

@@ -28,6 +28,7 @@ from .evaluate import (
     vllm_lm_eval,
 )
 from .inference import (
+    batched_inference,
     single_inference,
     vllm_inference,
 )
@@ -85,6 +86,7 @@ __all__ = [
     "StepInfoCallback",
     "TrainingArguments",
     "apply_sparse",
+    "batched_inference",
     "build_data_module",
     "check_sparsity",
     "flexible_load",

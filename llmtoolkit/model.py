@@ -36,6 +36,32 @@ from .utils import (
 )
 
 
+def auto_add_special_tokens(model, tokenizer):
+    special_tokens_dict = {}
+    if tokenizer.pad_token is None:
+        special_tokens_dict["pad_token"] = "<|reserved_special_token_100|>"
+    if tokenizer.eos_token is None:
+        special_tokens_dict["eos_token"] = tokenizer.convert_ids_to_tokens(
+            model.config.eos_token_id
+        )
+    if tokenizer.bos_token is None:
+        special_tokens_dict["bos_token"] = tokenizer.convert_ids_to_tokens(
+            model.config.bos_token_id
+        )
+    if tokenizer.unk_token is None:
+        special_tokens_dict["unk_token"] = "<|reserved_special_token_101|>"
+
+    # This is the unoptimized version that may make your embedding size not be divisible by 64.
+    print_rank_0(f"adding special tokens, {special_tokens_dict}")
+    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
+    model.resize_token_embeddings(len(tokenizer))
+
+    print_rank_0(f"pad_token: {tokenizer.pad_token}")
+    print_rank_0(f"eos_token: {tokenizer.eos_token}")
+    print_rank_0(f"bos_token: {tokenizer.bos_token}")
+    print_rank_0(f"unk_token: {tokenizer.unk_token}")
+
+
 def find_all_linear_names(model):
     linear_cls = (bnb.nn.Linear4bit, bnb.nn.Linear8bitLt, torch.nn.Linear)
     conv1d_cls = Conv1D
@@ -271,24 +297,7 @@ def get_accelerate_model(
     # TODO: check if left padding will cause any issues
     tokenizer.padding_side = "left"
 
-    special_tokens_dict = {}
-    if tokenizer.pad_token is None:
-        special_tokens_dict["pad_token"] = "<|reserved_special_token_100|>"
-    if tokenizer.eos_token is None:
-        special_tokens_dict["eos_token"] = tokenizer.convert_ids_to_tokens(
-            model.config.eos_token_id
-        )
-    if tokenizer.bos_token is None:
-        special_tokens_dict["bos_token"] = tokenizer.convert_ids_to_tokens(
-            model.config.bos_token_id
-        )
-    if tokenizer.unk_token is None:
-        special_tokens_dict["unk_token"] = "<|reserved_special_token_101|>"
-    smart_tokenizer_and_embedding_resize(special_tokens_dict, tokenizer, model)
-    print_rank_0(f"pad_token: {tokenizer.pad_token}")
-    print_rank_0(f"eos_token: {tokenizer.eos_token}")
-    print_rank_0(f"bos_token: {tokenizer.bos_token}")
-    print_rank_0(f"unk_token: {tokenizer.unk_token}")
+    auto_add_special_tokens(model, tokenizer)
 
     if quant_config:
         model = prepare_model_for_kbit_training(
@@ -353,20 +362,6 @@ def print_trainable_parameters(model, debug=False):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param:.2f}"
     )
     return (trainable_params, all_param, 100 * trainable_params / all_param)
-
-
-def smart_tokenizer_and_embedding_resize(
-    special_tokens_dict: dict,
-    tokenizer: transformers.PreTrainedTokenizer,
-    model: transformers.PreTrainedModel,
-):
-    """Resize tokenizer and embedding.
-
-    Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
-    """
-    print_rank_0(f"adding special tokens, {special_tokens_dict}")
-    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
-    model.resize_token_embeddings(len(tokenizer))
 
 
 # deprecate
