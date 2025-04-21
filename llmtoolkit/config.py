@@ -8,6 +8,7 @@ class PEFTConfig:
     lora_rank: int
     lora_scale: float
     init_lora_weights: str
+    sparse_preserve_mode: int
 
 
 @dataclass

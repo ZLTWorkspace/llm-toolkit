@@ -227,56 +227,22 @@ Suppose the training will run n steps.
 |---25%---|--50%--|----------------|
 """
 
-
+# TODO: check if the model is SQALoraModel
 class SparseCallbackBase(transformers.TrainerCallback):
     def __init__(
         self,
         model,
-        sparsity_ratio: float,
-        sparse_preserve_accuracy: bool,
-        output_dir: str,
+        sparsity_ratio: float = 0.5,
+        sparse_warmup_ratio: float = 0.5,
+        sparse_warmup_steps: int = 2,
+        sparse_prune_largest: bool = False,
     ):
         self.model = model
         self.sparsity_ratio = sparsity_ratio
-        self.sparse_preserve_accuracy = sparse_preserve_accuracy
-        self.named_mask = {}
-        self.sparse_config = {}
-        self.output_dir = output_dir
-        self.train_end = False
-
-    def on_save(self, args, state, control, **kwargs):
-        checkpoint_dir = os.path.join(
-            self.output_dir, f"checkpoint-{state.global_step}"
-        )
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        torch.save(self.named_mask, os.path.join(checkpoint_dir, "named_mask.pth"))
-        print_rank_0(
-            f"named_mask.pth has been saved at {checkpoint_dir}/named_mask.pth"
-        )
-        safe_dict2file(
-            self.sparse_config,
-            os.path.join(checkpoint_dir, "sparse_config.json"),
-            overwrite=True,
-        )
-
-
-class DynamicSparseCallback(SparseCallbackBase):
-    def __init__(
-        self,
-        model,
-        sparsity_ratio: float = 0.5,
-        sparse_preserve_accuracy: bool = False,
-        sparse_prune_largest: bool = False,
-        sparse_warmup_ratio: float = 0.5,
-        sparse_warmup_steps: int = 2,
-        output_dir: str = "",
-    ):
-        super().__init__(model, sparsity_ratio, sparse_preserve_accuracy, output_dir)
         self.sparse_warmup_ratio = sparse_warmup_ratio
         self.sparse_warmup_steps = sparse_warmup_steps
         self.sparse_prune_largest = sparse_prune_largest
         self.sparse_schedule = {}
-        self.sparse_config.update({"sparse_type": "dynamic_sparse"})
 
     def create_sparse_schedule(self, max_steps: int):
         max_sparse_warmup = max_steps * self.sparse_warmup_ratio
@@ -295,33 +261,5 @@ class DynamicSparseCallback(SparseCallbackBase):
     def on_step_begin(self, args, state, control, **kwargs):
         step = state.global_step
         if step in self.sparse_schedule:
-            self.named_mask = prune_magnitude(
-                model=self.model,
-                sparsity_ratio=self.sparse_schedule[step],
-                sparse_preserve_accuracy=self.sparse_preserve_accuracy,
-                sparse_prune_largest=self.sparse_prune_largest,
-            )
-            self.sparse_config.update({"sparse_schedule": self.sparse_schedule})
-            self.sparse_config.update(
-                {"current_sparsity_ratio": self.sparse_schedule[step]}
-            )
-            self.sparse_config.update({"sparse_module": list(self.named_mask.keys())})
-
-
-class StaticSparseCallback(SparseCallbackBase):
-    def __init__(
-        self,
-        model,
-        sparsity_ratio: float = 0.5,
-        sparse_preserve_accuracy: bool = False,
-        output_dir: str = "",
-    ):
-        super().__init__(model, sparsity_ratio, sparse_preserve_accuracy, output_dir)
-        self.sparse_config.update({"sparse_type": "static_sparse"})
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        self.named_mask = prune_magnitude(
-            model=self.model, sparsity_ratio=self.sparsity_ratio, sparse_preserve_accuracy = self.sparse_preserve_accuracy
-        )
-        self.sparse_config.update({"current_sparsity_ratio": self.sparsity_ratio})
-        self.sparse_config.update({"sparse_module": list(self.named_mask.keys())})
+            self.model.prune(sparsity_ratio = self.sparse_schedule[step], sparse_prune_largest = self.sparse_prune_largest)
+            print_rank_0("sparsity", self.model.calculate_sparsity())

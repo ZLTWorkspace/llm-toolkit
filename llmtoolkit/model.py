@@ -74,9 +74,6 @@ def find_all_linear_names(model):
     if "lm_head" in lora_module_names:
         lora_module_names.remove("lm_head")
 
-    if "gate" in lora_module_names:
-        lora_module_names.remove("gate")
-
     return list(lora_module_names)
 
 
@@ -88,8 +85,9 @@ def peft_model(
     lora_rank: int,
     lora_scale: float,
     init_lora_weights: str,
+    sparse_preserve_mode: int,
 ):
-    if peft_method in ["lora", "lorafa", "vera", "dora"]:
+    if peft_method in ["lora", "lorafa", "vera", "dora", "sqalora"]:
         attention_modules = [
             "query",
             "q_proj",
@@ -179,6 +177,16 @@ def peft_model(
         elif peft_method == "vera":
             config = VeraConfig(r=lora_rank, target_modules=modules)
             _peft_model = get_peft_model(model, config)
+        elif peft_method == "sqalora":
+            from .sqalora import SQALoraModel, SQALoraConfig
+            config = SQALoraConfig(
+                r=lora_rank,
+                lora_alpha=int(lora_scale * lora_rank),
+                target_modules=modules,
+                init_lora_weights=init_lora_weights if init_lora_weights is not None else True,
+                sparse_preserve_mode = sparse_preserve_mode,
+            )
+            _peft_model = SQALoraModel(model, config)
     elif peft_method == "prefix":
         config = PrefixTuningConfig(
             num_virtual_tokens=30,
@@ -312,6 +320,7 @@ def get_accelerate_model(
             peft_config.lora_rank,
             peft_config.lora_scale,
             peft_config.init_lora_weights,
+            peft_config.sparse_preserve_mode,
         )
 
         if flash_attn or deepspeed is not None:

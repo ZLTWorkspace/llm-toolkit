@@ -17,7 +17,7 @@ from .arguments import (
     get_unique_key,
 )
 from .callbacks import (
-    DynamicSparseCallback,
+    SparseCallbackBase,
     EmptycacheCallback,
     PT_ProfCallback,
     StepInfoCallback,
@@ -91,14 +91,12 @@ def train(
 
     if training_args.sparse:
         trainer.add_callback(
-            DynamicSparseCallback(
+            SparseCallbackBase(
                 model=model,
                 sparsity_ratio=training_args.sparsity_ratio,
-                sparse_preserve_accuracy=training_args.sparse_preserve_accuracy,
                 sparse_warmup_ratio=training_args.sparse_warmup_ratio,
                 sparse_warmup_steps=training_args.sparse_warmup_steps,
                 sparse_prune_largest=training_args.sparse_prune_largest,
-                output_dir=training_args.output_dir,
             )
         )
 
@@ -147,7 +145,9 @@ def train(
                 trainer.model = trainer.model.merge_and_unload()
                 trainer.save_model(os.path.join(training_args.output_dir, "merged"))
             else:
-                trainer.save_model(os.path.join(training_args.output_dir, "save"))
+                trainer.model.save_pretrained(os.path.join(training_args.output_dir, "save"))
+                trainer.tokenizer.save_pretrained(os.path.join(training_args.output_dir, "save"))
+
         else:
             print_rank_0(
                 "Since save_strategy is neither steps or epoch, there will be no model or checkpoint to save. This is an expected behavior when benchmarking the system efficiency of LLMs, this is an unexpected behavior when fine-tuning LLMs."

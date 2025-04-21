@@ -283,12 +283,6 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default=False,
         metadata={"help": "Do sparse on the base model. Default is False."},
     )
-    sparse_type: str = field(
-        default="dynamic_sparse",
-        metadata={
-            "help": "Sparse mode to use. Should be one of [`dynamic_sparse`, `dynamic_nm_sparse`, 'static_sparse', 'static_nm_sparse']."
-        },
-    )
     sparsity_ratio: float = field(
         default=0.5,
         metadata={
@@ -305,9 +299,9 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default=2,
         metadata={"help": "How many round will the sparse warmup goes."},
     )
-    sparse_preserve_accuracy: bool = field(
-        default=False,
-        metadata={"help": "Merge sparse W into A and B to preserve accuracy. Default is False."},
+    sparse_preserve_mode: int = field(
+        default=0,
+        metadata={"help": "Sparse preserve mode. Choose from [0, 1, 2]. Default is 0."},
     )
     sparse_prune_largest: bool = field(
         default=False,
@@ -415,7 +409,7 @@ def get_unique_key(
         "quant": "quant" if args.quant else None,
         "compute_type": "fp16" if args.fp16 else "bf16" if args.bf16 else "fp32",
         "deepspeed": args.deepspeed,
-        "sparse": f"{args.sparse_type}{args.sparsity_ratio}" if args.sparse else None,
+        "sparse": f"{args.sparsity_ratio}" if args.sparse else None,
     }
     key = ".".join(value for value in config_dict.values() if value is not None)
 

@@ -89,9 +89,10 @@ def create_timestamp():
 
 
 @rank_0
-def print_rank_0(message):
-    print(f"\033[1;33m[llm toolkit]\033[0m: {message}", flush=True)
-
+def print_rank_0(*args):
+    prefix = "\033[1;33m[llm toolkit]\033[0m: "
+    message = " ".join(str(arg) for arg in args)
+    print(f"{prefix}{message}", flush=True)
 
 @rank_0
 def safe_dict2file(dictionary: dict, filename: str, overwrite: bool = False):
