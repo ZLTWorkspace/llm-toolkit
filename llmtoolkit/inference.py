@@ -33,18 +33,22 @@ class InferBackend(ExplicitEnum):
 
 def transformers_inference(
     prompts: list,
-    model_name_or_path: str,
+    model_name_or_path: str = None,
     peft_name_or_path: str = None,
     max_lora_rank: int = 128,
     max_tokens: int = 1024,
     load_in_4bit: bool = False,
     batch_size: int = 1,
+    model = None,
+    tokenizer = None,
 ) -> list:
-    model, tokenizer = load(
-        base_model_name_or_path=model_name_or_path,
-        peft_model_name_or_path=peft_name_or_path,
-        load_in_4bit=load_in_4bit,
-    )
+    if not model or not tokenizer:
+        model, tokenizer = load(
+            base_model_name_or_path=model_name_or_path,
+            peft_model_name_or_path=peft_name_or_path,
+            load_in_4bit=load_in_4bit,
+        )
+    model.eval()
     accelerator = Accelerator()
     tokenizer.padding_side = "left"
 

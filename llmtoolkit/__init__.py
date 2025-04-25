@@ -26,6 +26,7 @@ from .evaluate import (
     infly_evaluate,
     offline_evaluate,
     vllm_lm_eval,
+    evaluate_JIT,
 )
 from .inference import (
     batched_inference,
@@ -114,5 +115,6 @@ __all__ = [
     "train_cli",
     "train_no_trainer",
     "vllm_inference",
-    "vllm_lm_eval"
+    "vllm_lm_eval",
+    "evaluate_JIT",
 ]

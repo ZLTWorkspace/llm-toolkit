@@ -8,12 +8,21 @@ import torch.nn.functional as F
 from transformers.pytorch_utils import Conv1D
 
 from peft.utils.other import transpose
+import bitsandbytes as bnb
 
 from .utils import (
     decomposeW2LinearWeightLR,
     mergeW2AB,
     _get_mask_prune_magnitude,
 )
+
+
+"""
+sparse_preserve_mode
+0: no sparse preserve
+1: (A+∑WL) * (B+∑WR)
+2: ∑(WL*WR) + AB
+"""
 
 
 class SQALoraLayer(nn.Module):
@@ -146,14 +155,6 @@ class SQALoraLayer(nn.Module):
             raise ValueError(f"Unknown mode {mode}")
 
 
-"""
-sparse_preserve_mode
-0: no sparse preserve
-1: (A+∑WL) * (B+∑WR)
-2: ∑(WL*WR) + AB
-"""
-
-
 class Linear(SQALoraLayer):
     # SQALora implemented in a dense layer
     def __init__(
@@ -167,14 +168,17 @@ class Linear(SQALoraLayer):
         use_rslora: bool = False,
         lora_bias: bool = False,
         sparse_preserve_mode: int = 0,
+        quant_method: str = "nf4",
         **kwargs,
     ) -> None:
         super().__init__(base_layer, **kwargs)
         self.fan_in_fan_out = fan_in_fan_out
         self.sparse_preserve_mode = sparse_preserve_mode
+        self.quant_method = quant_method
+
         self.update_layer(r, lora_alpha, lora_dropout, init_lora_weights, use_rslora, lora_bias)
 
-    @torch.no_grad
+    @torch.no_grad()
     def merge(self, safe_merge: bool = False) -> None:
         """
         Merge the active adapter weights into the base weights
@@ -211,7 +215,7 @@ class Linear(SQALoraLayer):
 
         self.merged = True
 
-    @torch.no_grad
+    @torch.no_grad()
     def unmerge(self) -> None:
         if not self.merged:
             warnings.warn("Already unmerged. Nothing to do.")
@@ -219,7 +223,7 @@ class Linear(SQALoraLayer):
         self.get_base_layer().weight.data -= self.get_delta_weight()
         self.merged = False
 
-    @torch.no_grad
+    @torch.no_grad()
     def get_delta_weight(self) -> torch.Tensor:
         weight_A = self.lora_A.weight
         weight_B = self.lora_B.weight
@@ -272,7 +276,7 @@ class Linear(SQALoraLayer):
             result = result.to(torch_result_dtype)
         return result
 
-    @torch.no_grad
+    @torch.no_grad()
     def prune(
         self,
         sparsity_ratio: float,
@@ -335,14 +339,72 @@ class Linear(SQALoraLayer):
         else:
             raise ValueError(f"Unknown sparse preserve mode {sparse_preserve_mode}")
 
-    @torch.no_grad
+    @torch.no_grad()
+    def quantize(
+        self,
+        compute_dtype: torch.dtype = torch.bfloat16,
+    ):
+        if self.quant_method == "nf4":
+            if isinstance(self.base_layer, bnb.nn.Linear4bit):
+                return
+            device = self.base_layer.weight.device
+            weight_bf16 = self.base_layer.weight.detach().to(compute_dtype).contiguous()
+            bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
+
+            qlinear = bnb.nn.Linear4bit(
+                self.in_features,
+                self.out_features,
+                bias=bias is not None,
+                compute_dtype=compute_dtype,
+                quant_type="nf4",
+            ).to(device)
+
+            # 3. 利用 bitsandbytes 的 Params4bit 保存量化后权重
+            qlinear.weight = bnb.nn.Params4bit(
+                weight_bf16,
+                requires_grad=False,
+                quant_type="nf4",
+            ).to(device)
+            if bias is not None:
+                qlinear.bias = nn.Parameter(bias)
+            self.base_layer = qlinear
+
+    @torch.no_grad()
+    def dequantize(
+        self,
+        compute_dtype: torch.dtype = torch.bfloat16,
+    ):
+        if self.quant_method == "nf4":
+            if not isinstance(self.base_layer, bnb.nn.Linear4bit):
+                return
+
+            weight_bf16 = bnb.functional.dequantize_4bit(
+                self.base_layer.weight.data, self.base_layer.weight.quant_state
+            )
+            # assert weight_bf16.dtype == compute_dtype
+            bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
+
+            dense = nn.Linear(
+                self.in_features,
+                self.out_features,
+                bias=bias is not None,
+                dtype=compute_dtype,
+                device=weight_bf16.device,
+            )
+            dense.weight.data.copy_(weight_bf16)
+            if bias is not None:
+                dense.bias.data.copy_(bias)
+
+            self.base_layer = dense
+
+    @torch.no_grad()
     def apply_sparse_mask(self, sparse_mask: torch.Tensor):
         if sparse_mask is not None:
             base_layer = self.get_base_layer()
             base_layer.weight.data[sparse_mask.cuda()] = 0
             self.sparse_mask = sparse_mask.cpu()
 
-    @torch.no_grad
+    @torch.no_grad()
     def sparsity(self, eps=1e-8) -> float:
         base_layer = self.get_base_layer()
         num_zeros = torch.sum(torch.abs(base_layer.weight.data) < eps).item()

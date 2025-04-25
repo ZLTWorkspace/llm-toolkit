@@ -12,6 +12,7 @@ from .dataset import (
 from .inference import (
     InferBackend,
     batched_inference,
+    transformers_inference,
 )
 from .utils import (
     create_timestamp,
@@ -213,6 +214,48 @@ def offline_evaluate(task: str, data: list) -> float:
 
     evaluator = Evaluator(strategy)
     return evaluator.evaluate(data)
+
+
+def evaluate_JIT(
+    task: str,
+    model,
+    tokenizer,
+) -> float:
+    if task == "gsm8k":
+        strategy = GSM8KEvaluationStrategy()
+    elif task == "mmlu":
+        strategy = MMLUEvaluationStrategy()
+    else:
+        strategy = DefaultEvaluationStrategy()
+
+    evaluator = Evaluator(strategy)
+    eval_dataset = build_data_module(tokenizer, task)["eval_dataset"]
+    prompts = list(eval_dataset["input"])
+    prompt_to_golden = {item["input"]: item["output"] for item in eval_dataset}
+
+    # since the evaluation is based on the keywords in the output
+    # thus we only keep sufficient sequence
+    max_tokens = {
+        "mmlu": 32,
+        "gsm8k": 1024,
+    }
+
+    results = transformers_inference(prompts=prompts, max_tokens=max_tokens[task], model=model, tokenizer=tokenizer)
+
+    if get_rank() != 0 or results is None:
+        return None
+
+    inspection = []
+    for result in results:
+        prompt = result["prompt"]
+        response = result["response"]
+        golden = prompt_to_golden.get(prompt, None)
+        if golden is not None:
+            inspection.append(
+                {"prompt": prompt, "golden": golden, "predicate": response}
+            )
+    safe_list2file(inspection, f"eval_{create_timestamp()}.json")
+    return evaluator.evaluate(inspection)
 
 
 def infly_evaluate(

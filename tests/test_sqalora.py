@@ -16,6 +16,28 @@ from llmtoolkit.sqalora.config import SQALoraConfig
 
 BASEMODEL = "/hpc2hdd/home/lzhang330/asset/Llama-2-7b-chat-hf"
 
+
+def generate(model, tokenizer):
+    prompt = "Question: Which of the following types of tests is designed primarily to help predict how successful a person is likely to be in learning new skills?\nA. Achievement\nB. Aptitude\nC. Interest\nD. Personality\n\nAnswer:"
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=64,
+            do_sample=True,
+            top_p=0.9,
+            temperature=0.7,
+        )
+    full_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+
+    print("=" * 40)
+    print("Prompt:\n", prompt)
+    print("-" * 40)
+    print("Response:\n", full_text[len(prompt) :].lstrip())
+    print("=" * 40)
+
+
 def test_sqalora_config():
     config = SQALoraConfig(
         r=8,
@@ -108,24 +130,7 @@ def test_sqalora_model(sparse_preserve_mode: int):
     model.eval()
     tokenizer.pad_token = tokenizer.eos_token
 
-    prompt = "Question: Which of the following types of tests is designed primarily to help predict how successful a person is likely to be in learning new skills?\nA. Achievement\nB. Aptitude\nC. Interest\nD. Personality\n\nAnswer:"
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-        generated_ids = model.generate(
-            **inputs,
-            max_new_tokens=64,
-            do_sample=True,
-            top_p=0.9,
-            temperature=0.7,
-        )
-    full_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
-
-    print("=" * 40)
-    print("Prompt:\n", prompt)
-    print("-" * 40)
-    print("Response:\n", full_text[len(prompt) :].lstrip())
-    print("=" * 40)
+    generate(model, tokenizer)
 
     model.save_pretrained(f"sqalora_model_sparse_preserve_mode_{sparse_preserve_mode}")
 
@@ -147,30 +152,48 @@ def test_sqalora_model_load(sparse_preserve_mode: int):
     model.eval()
     tokenizer.pad_token = tokenizer.eos_token
 
-    prompt = "Question: Which of the following types of tests is designed primarily to help predict how successful a person is likely to be in learning new skills?\nA. Achievement\nB. Aptitude\nC. Interest\nD. Personality\n\nAnswer:"
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    generate(model, tokenizer)
 
-    with torch.no_grad():
-        generated_ids = model.generate(
-            **inputs,
-            max_new_tokens=64,
-            do_sample=True,
-            top_p=0.9,
-            temperature=0.7,
-        )
-    full_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
 
-    print("=" * 40)
-    print("Prompt:\n", prompt)
-    print("-" * 40)
-    print("Response:\n", full_text[len(prompt) :].lstrip())
-    print("=" * 40)
+def test_sqalora_model_quant_dequant():
+    config = SQALoraConfig(
+        r=128,
+        lora_alpha=256,
+        lora_dropout=0.0,
+        target_modules=["q_proj"],
+        init_lora_weights=True,
+        use_rslora=False,
+        lora_bias=False,
+        sparse_preserve_mode=0,
+    )
+
+    pretrained_model_kwargs = {
+        "pretrained_model_name_or_path": BASEMODEL,
+        "attn_implementation": "flash_attention_2",
+        "torch_dtype": torch.bfloat16,
+    }
+    model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_kwargs["pretrained_model_name_or_path"])
+    tokenizer.pad_token = tokenizer.eos_token
+
+    model = SQALoraModel(model=model, config=config)
+    model.to("cuda")
+    model.eval()
+
+    model.quantize()
+    print_rank_0(model)
+    generate(model, tokenizer)
+
+    model.dequantize()
+    print_rank_0(model)
+    generate(model, tokenizer)
+
 
 if __name__ == "__main__":
-    test_sqalora_model_load(2)
+    test_sqalora_model_quant_dequant()
     exit()
     test_sqalora_config()
-    for i in [0,1,2]:
+    for i in [0, 1, 2]:
         test_sqalora_linear(i)
         test_sqalora_model(i)
         test_sqalora_model_load(i)

@@ -230,6 +230,17 @@ class SQALoraModel(nn.Module):
                     offload=offload,
                     sparse_prune_largest=sparse_prune_largest,
                 )
+    def quantize(self):
+        for name, module in self.model.named_modules():
+            if isinstance(module, (Linear, Linear8bitLt, Linear4bit)):
+                print_rank_0(f"Quantizing layer - {name}")
+                module.quantize()
+
+    def dequantize(self):
+        for name, module in self.model.named_modules():
+            if isinstance(module, (Linear, Linear8bitLt, Linear4bit)):
+                print_rank_0(f"Dequantizing layer - {name}")
+                module.dequantize()
 
     @torch.no_grad()
     def calculate_sparsity(self, eps=1e-4) -> float:
