@@ -48,6 +48,43 @@ class AdamW_lorafa(Optimizer):
 
     def is_same(self, name_list):
         return name_list[0].split(".")[:-3] == name_list[1].split(".")[:-3]
+        
+    def load_state_dict(self, state_dict):
+        # 父类加载
+        super().load_state_dict(state_dict)
+
+        # 构建映射表
+        name_to_device = {}
+        for group in self.param_groups:
+            names = group.get("names", [])
+            params = group["params"]
+            if len(names) != len(params):
+                raise ValueError("Names list length does not match params in a group.")
+            for p, name in zip(params, names):
+                # 与step中的截断对齐
+                if "lora_B" in name:
+                    n = name[:name.find("lora_B")] + "lora"
+                    name_to_device[n] = p.device
+
+        # move状态到对应的gpu
+        new_state = {}
+        for key, state in self.state.items():
+            if isinstance(key, str):
+                if key not in name_to_device:
+                    raise KeyError(f"Parameter name {key} not found in device mapping.")
+                device = name_to_device[key]
+            else:
+                device = key.device
+
+            new_state_entry = {}
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    new_state_entry[k] = v.to(device)
+                else:
+                    new_state_entry[k] = v
+            new_state[key] = new_state_entry
+
+        self.state = new_state
 
     @torch.no_grad()
     def step(self, closure: Callable = None):
@@ -95,15 +132,15 @@ class AdamW_lorafa(Optimizer):
                     if len(param_list) == 2:
                         state["step"] = 0
                         # Exponential moving average of gradient values
-                        state["exp_avg_B"] = torch.zeros_like(param_list[1])
+                        state["exp_avg_B"] = torch.zeros_like(param_list[1], device=param_list[1].device)
                         # Exponential moving average of squared gradient values
-                        state["exp_avg_sq_B"] = torch.zeros_like(param_list[1])
+                        state["exp_avg_sq_B"] = torch.zeros_like(param_list[1], device=param_list[1].device)
                     else:
                         state["step"] = 0
                         # Exponential moving average of gradient values
-                        state["exp_avg"] = torch.zeros_like(p)
+                        state["exp_avg"] = torch.zeros_like(p, device=p.device)
                         # Exponential moving average of squared gradient values
-                        state["exp_avg_sq"] = torch.zeros_like(p)
+                        state["exp_avg_sq"] = torch.zeros_like(p, device=p.device)
 
                 if len(param_list) == 2:
                     A = param_list[0]
@@ -129,7 +166,7 @@ class AdamW_lorafa(Optimizer):
 
                     exp_avg_B, exp_avg_sq_B = state["exp_avg_B"], state["exp_avg_sq_B"]
                     beta1, beta2 = group["betas"]
-                    state["step"] += 1
+                    state["step"] += 1 
                     exp_avg_B.mul_(beta1).add_(grad_B, alpha=(1.0 - beta1))
                     exp_avg_sq_B.mul_(beta2).addcmul_(grad_B, grad_B, value=1.0 - beta2)
 

@@ -1,5 +1,6 @@
 import os
 import json
+import re
 
 import torch
 import transformers
@@ -40,7 +41,32 @@ from .utils import (
 from .memory_profiler import (
     export_memory_timeline_html,
 )
+from .sparse import (
+    apply_sparse,
+)
 
+PREFIX_CHECKPOINT_DIR = "checkpoint"
+_re_checkpoint = re.compile(r"^" + PREFIX_CHECKPOINT_DIR + r"\-(\d+)$")
+
+def get_last_checkpoint(folder):
+    content = os.listdir(folder)
+    checkpoints = [
+        path
+        for path in content
+        if _re_checkpoint.search(path) is not None and os.path.isdir(os.path.join(folder, path))
+    ]
+    if len(checkpoints) == 0:
+        return
+    return os.path.join(folder, max(checkpoints, key=lambda x: int(_re_checkpoint.search(x).groups()[0])))
+
+def print_pruned_params(model, named_mask):
+    for n, m in model.named_modules():
+        if n in named_mask:
+            mask = named_mask[n].to(m.weight.data.device)
+            prune_indices = (mask == 1).nonzero(as_tuple=True)
+            sampled_indices = tuple(ind[:5] for ind in prune_indices)
+            print(f"  {n}-----{m.weight.data[sampled_indices]}")
+            
 
 def train(
     model,
@@ -58,6 +84,17 @@ def train(
     trainable_param, all_param, trainable_rate = print_trainable_parameters(
         model, training_args.debug_mode
     )
+
+    if training_args.resume_from_checkpoint and training_args.sparse:
+        ckpt_dir = get_last_checkpoint(training_args.output_dir)
+        sparse_named_mask_path = os.path.join(ckpt_dir, "named_mask.pth")
+        print_rank_0(f"apply sparse according to {sparse_named_mask_path}")
+        named_mask = torch.load(sparse_named_mask_path)
+        print_rank_0("weights before apply sparse: ")
+        print_pruned_params(model, named_mask)
+        apply_sparse(model, named_mask)
+        print_rank_0("weights after apply sparse: ")
+        print_pruned_params(model, named_mask)
 
     # TODO: rename training_args.adamw
     if training_args.adamw and isinstance(model, PeftModel):
@@ -131,7 +168,7 @@ def train(
 
     if training_args.do_train:
         print_rank_0("*** Train ***")
-        train_result = trainer.train()
+        train_result = trainer.train(training_args.resume_from_checkpoint)
         metrics = train_result.metrics
         trainer.log_metrics("train", metrics)
         save_strategy = (

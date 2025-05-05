@@ -279,6 +279,12 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
             "help": "Training parallelism, choose from dp|pp, default is dp. This is supported by transformers and accelerate."
         },
     )
+    resume_from_checkpoint: bool = field(
+        default=False,
+        metadata={
+            "help": "If equals to True, load the last checkpoint in *args.output_dir* as saved by a previous instance of Trainer."
+        },
+    )
     sparse: bool = field(
         default=False,
         metadata={"help": "Do sparse on the base model. Default is False."},
