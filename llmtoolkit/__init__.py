@@ -22,11 +22,11 @@ from .dataset import (
     build_data_module,
 )
 from .evaluate import (
+    evaluate_JIT,
     hf_lm_eval,
     infly_evaluate,
     offline_evaluate,
     vllm_lm_eval,
-    evaluate_JIT,
 )
 from .inference import (
     batched_inference,
@@ -90,6 +90,7 @@ __all__ = [
     "batched_inference",
     "build_data_module",
     "check_sparsity",
+    "evaluate_JIT",
     "flexible_load",
     "get_accelerate_model",
     "get_args",
@@ -116,5 +117,4 @@ __all__ = [
     "train_no_trainer",
     "vllm_inference",
     "vllm_lm_eval",
-    "evaluate_JIT",
 ]

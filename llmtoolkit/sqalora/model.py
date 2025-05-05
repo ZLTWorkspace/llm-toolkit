@@ -1,29 +1,22 @@
 from __future__ import annotations
 
 import os
-import math
 import warnings
 from dataclasses import asdict
 from enum import Enum
-from typing import Any, Optional, Union
-import json
-
-import torch
-import torch.nn as nn
-from torch.nn.init import _calculate_correct_fan
-from tqdm import tqdm
-from transformers.pytorch_utils import Conv1D
-from safetensors.torch import load_file, save_file
-
-from peft.import_utils import is_bnb_4bit_available, is_bnb_available
+from typing import Any
 
 import bitsandbytes as bnb
-
-from .config import SQALoraConfig
-from .layer import SQALoraLayer, Linear
-from .bnb import Linear8bitLt, Linear4bit
+import torch
+import torch.nn as nn
+from safetensors.torch import load_file, load_model, save_model
+from tqdm import tqdm
+from transformers.pytorch_utils import Conv1D
 
 from ..utils import print_rank_0
+from .config import SQALoraConfig
+from .layer import Linear, SQALoraLayer
+
 
 def _get_submodules(model, key):
     parent = model.get_submodule(".".join(key.split(".")[:-1]))
@@ -32,37 +25,48 @@ def _get_submodules(model, key):
     return parent, target, target_name
 
 
+def _get_module_name(model, target_module):
+    for name, module in model.named_modules():
+        if module is target_module:
+            return name
+    return None
+
+
+def _get_module(root: nn.Module, path: str) -> nn.Module:
+    if hasattr(root, "get_submodule"):
+        return root.get_submodule(path)
+    for p in path.split("."):
+        root = getattr(root, p)
+    return root
+
+
 class SQALoraModel(nn.Module):
     prefix: str = "lora_"
 
-    def __init__(self, model, config) -> None:
+    def __init__(self, model, sqalora_config) -> None:
         super().__init__()
         self.model = model
-        self.config = config
+        self.sqalora_config = sqalora_config
         self.targeted_module_names: list[str] = []
-        self.inject_adapter(self.model, config)
+        self.inject_adapter(self.model, sqalora_config)
 
     def forward(self, *args: Any, **kwargs: Any):
         return self.model.forward(*args, **kwargs)
 
-    def inject_adapter(self, model: nn.Module, config: SQALoraConfig) -> None:
-        target_suffixes = set(config.target_modules)
+    def inject_adapter(self, model: nn.Module, sqalora_config: SQALoraConfig) -> None:
+        target_suffixes = set(sqalora_config.target_modules)
 
         for full_name, module in model.named_modules():
-            # 跳过根模块
             if full_name == "":
                 continue
 
-            # 名称匹配
             if not any(full_name == s or full_name.endswith(f".{s}") for s in target_suffixes):
                 continue
 
-            # 命中：记录并替换
             self.targeted_module_names.append(full_name)
             parent, _, child_name = _get_submodules(model, full_name)
-            self._create_and_replace(config, module, child_name, parent)
+            self._create_and_replace(sqalora_config, module, child_name, parent)
 
-        # 只保留 LoRA 相关参数可训练
         self._mark_only_adapters_as_trainable(model)
 
     def _create_and_replace(
@@ -82,6 +86,7 @@ class SQALoraModel(nn.Module):
             "use_rslora": sqalora_config.use_rslora,
             "lora_bias": sqalora_config.lora_bias,
             "sparse_preserve_mode": sqalora_config.sparse_preserve_mode,
+            "quant_method": sqalora_config.quant_method,
             "loaded_in_8bit": getattr(self.model, "is_loaded_in_8bit", False),
             "loaded_in_4bit": getattr(self.model, "is_loaded_in_4bit", False),
         }
@@ -142,33 +147,7 @@ class SQALoraModel(nn.Module):
         else:
             target_base_layer = target
 
-        if loaded_in_8bit and isinstance(target_base_layer, bnb.nn.Linear8bitLt):
-            eightbit_kwargs = {}
-            return Linear8bitLt(
-                target,
-                kwargs["r"],
-                kwargs["lora_alpha"],
-                kwargs["lora_dropout"],
-                kwargs["fan_in_fan_out"],
-                kwargs["init_lora_weights"],
-                kwargs["use_rslora"],
-                kwargs["lora_bias"],
-                kwargs["sparse_preserve_mode"],
-            )
-        elif loaded_in_4bit and isinstance(target_base_layer, bnb.nn.Linear4bit):
-            fourbit_kwargs = {}
-            return Linear4bit(
-                target,
-                kwargs["r"],
-                kwargs["lora_alpha"],
-                kwargs["lora_dropout"],
-                kwargs["fan_in_fan_out"],
-                kwargs["init_lora_weights"],
-                kwargs["use_rslora"],
-                kwargs["lora_bias"],
-                kwargs["sparse_preserve_mode"],
-            )
-        elif isinstance(target_base_layer, torch.nn.Linear):
+        if isinstance(target_base_layer, torch.nn.Linear):
             if kwargs["fan_in_fan_out"]:
                 warnings.warn(
                     "fan_in_fan_out is set to True but the target module is `torch.nn.Linear`. "
@@ -197,6 +176,7 @@ class SQALoraModel(nn.Module):
             kwargs["use_rslora"],
             kwargs["lora_bias"],
             kwargs["sparse_preserve_mode"],
+            kwargs["quant_method"],
         )
 
         return new_module
@@ -221,7 +201,7 @@ class SQALoraModel(nn.Module):
 
     def prune(self, sparsity_ratio: float = 0.5, prune_n=0, prune_m=0, offload=True, sparse_prune_largest=False):
         for name, module in self.model.named_modules():
-            if isinstance(module, (Linear, Linear8bitLt, Linear4bit)):
+            if isinstance(module, Linear):
                 print_rank_0(f"Pruning layer - {name}, sparsity ratio = {sparsity_ratio}")
                 module.prune(
                     sparsity_ratio=sparsity_ratio,
@@ -230,15 +210,16 @@ class SQALoraModel(nn.Module):
                     offload=offload,
                     sparse_prune_largest=sparse_prune_largest,
                 )
+
     def quantize(self):
         for name, module in self.model.named_modules():
-            if isinstance(module, (Linear, Linear8bitLt, Linear4bit)):
+            if isinstance(module, Linear):
                 print_rank_0(f"Quantizing layer - {name}")
                 module.quantize()
 
     def dequantize(self):
         for name, module in self.model.named_modules():
-            if isinstance(module, (Linear, Linear8bitLt, Linear4bit)):
+            if isinstance(module, Linear):
                 print_rank_0(f"Dequantizing layer - {name}")
                 module.dequantize()
 
@@ -259,107 +240,127 @@ class SQALoraModel(nn.Module):
     def save_pretrained(self, save_directory: str) -> None:
         if not os.path.exists(save_directory):
             os.makedirs(save_directory, exist_ok=True)
-
-        tensor_dict: dict[str, torch.Tensor] = {}
-
-        for module_name, module in self.model.named_modules():
-            if not isinstance(module, (Linear, Linear8bitLt, Linear4bit)):
-                continue
-
-            prefix = module_name
-
-            # lora_A / lora_B
-            if module.lora_A is not None:
-                tensor_dict[f"{prefix}.lora_A.weight"] = module.lora_A.weight.cpu()
-            if module.lora_B is not None:
-                tensor_dict[f"{prefix}.lora_B.weight"] = module.lora_B.weight.cpu()
-                if module.lora_bias and module.lora_B.bias is not None:
-                    tensor_dict[f"{prefix}.lora_B.bias"] = module.lora_B.bias.cpu()
-
-            for wl_key, wl_layer in module.WL.items():
-                tensor_dict[f"{prefix}.WL.{wl_key}.weight"] = wl_layer.weight.cpu()
-            for wr_key, wr_layer in module.WR.items():
-                tensor_dict[f"{prefix}.WR.{wr_key}.weight"] = wr_layer.weight.cpu()
-
-            if module.sparse_mask is not None:
-                tensor_dict[f"{prefix}.sparse_mask"] = module.sparse_mask.to(torch.uint8).cpu()
-
-        model_path = os.path.join(save_directory, "adapter_model.safetensors")
-        save_file(tensor_dict, model_path)
-        if hasattr(self.config, "peft_type"):
-            delattr(self.config, "peft_type")
-        self.config.save_pretrained(save_directory)
+        model_path = os.path.join(save_directory, "model.safetensors")
+        save_model(self.model, model_path)
+        self.sqalora_config.save_pretrained(save_directory)
 
     @classmethod
     @torch.no_grad()
     def from_pretrained(
         cls,
         model: nn.Module,
-        peft_model_name_or_path: str,
+        sqalora_model_name_or_path: str,
         **kwargs,
     ) -> SQALoraModel:
+        sqalora_config = SQALoraConfig.from_pretrained(sqalora_model_name_or_path)
+        sqalora_model = cls(model, sqalora_config)
 
-        config = SQALoraConfig.from_pretrained(peft_model_name_or_path)
-        sqalora_model = cls(model, config)
+        safetensors_path = os.path.join(sqalora_model_name_or_path, "model.safetensors")
+        if not os.path.isfile(safetensors_path):
+            raise FileNotFoundError(f"Cannot find model.safetensors in {safetensors_path}")
+        state_dict = load_file(safetensors_path)
 
-        weight_path = os.path.join(peft_model_name_or_path, "adapter_model.safetensors")
-        if not os.path.isfile(weight_path):
-            raise FileNotFoundError(f"Cannot find adapter weight file: {weight_path}")
-
-        sd: dict[str, torch.Tensor] = load_file(weight_path, device="cpu")
-
-        for module_name, module in sqalora_model.model.named_modules():
-            if not isinstance(module, (Linear, Linear8bitLt, Linear4bit)):
+        # process WL and WR
+        for full_key in list(state_dict.keys()):
+            if ".WL." not in full_key and ".WR." not in full_key:
                 continue
 
-            prefix = module_name
-            dev_A   = module.lora_A.weight.device
-            dev_B   = module.lora_B.weight.device
-            dtype_A = module.lora_A.weight.dtype
-            dtype_B = module.lora_B.weight.dtype
+            parts = full_key.split(".")
+            if "WL" in parts:
+                lr_type = "WL"
+            else:
+                lr_type = "WR"
+            idx = parts.index(lr_type)
 
-            key = f"{prefix}.lora_A.weight"
-            if key in sd:
-                module.lora_A.weight.copy_(sd[key].to(device=dev_A, dtype=dtype_A))
+            module_path = ".".join(parts[:idx])
+            step_name, param_name = parts[idx + 1], parts[idx + 2]  # e.g. sparse_step_0, weight
 
-            key = f"{prefix}.lora_B.weight"
-            if key in sd:
-                module.lora_B.weight.copy_(sd[key].to(device=dev_B, dtype=dtype_B))
+            try:
+                linear_module: Linear = _get_module(sqalora_model.model, module_path)
+            except AttributeError as e:
+                raise RuntimeError(f"Cannot find submodule in {module_path}") from e
 
-            if module.lora_bias:
-                key = f"{prefix}.lora_B.bias"
-                if key in sd and module.lora_B.bias is not None:
-                    module.lora_B.bias.copy_(sd[key].to(device=dev_B, dtype=dtype_B))
+            lr_dict: nn.ModuleDict = getattr(linear_module, lr_type)  # WL 或 WR
+            if step_name not in lr_dict:
+                tensor = state_dict[full_key]
+                out_dim, in_dim = tensor.shape
+                new_linear = nn.Linear(
+                    in_dim,
+                    out_dim,
+                    bias=False,
+                    dtype=tensor.dtype,
+                    device=tensor.device,
+                )
+                lr_dict.update({step_name: new_linear})
 
-            wl_prefix = f"{prefix}.WL."
-            wr_prefix = f"{prefix}.WR."
+        # missing, unexpected = sqalora_model.model.load_state_dict(state_dict, strict=False)
+        missing, unexpected = load_model(sqalora_model.model, safetensors_path)
+        if len(unexpected) > 0:
+            warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {unexpected[:5]} ...")
+        if len(missing) > 0:
+            warnings.warn(f"there are {len(missing)} parameters that missing: {missing[:5]} ...")
 
-            steps = set()
-            for k in sd.keys():
-                if k.startswith(wl_prefix):
-                    steps.add(k.split(".")[-2])
-                if k.startswith(wr_prefix):
-                    steps.add(k.split(".")[-2])
-
-            for step in sorted(steps, key=lambda s: int(s.split("_")[-1])):
-                wl_key = f"{wl_prefix}{step}.weight"
-                wr_key = f"{wr_prefix}{step}.weight"
-                if wl_key not in sd or wr_key not in sd:
-                    continue
-
-                WL = sd[wl_key].to(device=dev_A, dtype=dtype_A)
-                WR = sd[wr_key].to(device=dev_B, dtype=dtype_B)
-
-                mode = 1 if step.endswith("0") else 2
-                module.update_WL_WR(WL, WR, mode)
-
-            mask_key = f"{prefix}.sparse_mask"
-            if mask_key in sd:
-                mask = sd[mask_key].to(torch.bool)
-                module.apply_sparse_mask(mask)
+        quant_method = sqalora_config.quant_method.lower()
+        _quant_load_handlers = {
+            "nf4": cls._load_nf4_weights,
+        }
+        handler_fn = _quant_load_handlers[quant_method]
+        handler_fn(sqalora_model, state_dict)
 
         return sqalora_model
 
+    @staticmethod
+    def _load_nf4_weights(model: SQALoraModel, state_dict: dict[str, torch.Tensor]):
+        for name, module in model.named_modules():
+            if isinstance(module, Linear):
+                base_layer = module.get_base_layer()
+                base_layer_name = _get_module_name(model, base_layer)
+                if base_layer_name in state_dict:
+                    print(f"Processing {base_layer_name}")
+                    param_value = state_dict[base_layer_name]
+                    param_dtype = param_value.dtype
+                    target_device = base_layer.device
+                    target_dtype = base_layer.dtype
+
+                    if target_dtype == torch.bfloat16 and param_dtype == torch.bfloat16:
+                        base_layer.weight.copy_(param_value)
+                    elif target_dtype == torch.bfloat16 and param_dtype == torch.uint8:
+                        module.quantize()
+                        quantized_stats = {}
+                        for k, v in state_dict.items():
+                            if base_layer_name + "." in k:
+                                quantized_stats[k] = v
+                        new_value = bnb.nn.Params4bit.from_prequantized(
+                            data=param_value,
+                            quantized_stats=quantized_stats,
+                            requires_grad=False,
+                            device=target_device,
+                        )
+                        base_layer.weight = new_value
+                    elif target_dtype == torch.uint8 and param_dtype == torch.bfloat16:
+                        base_layer.weight = bnb.nn.Params4bit(
+                            param_value,
+                            requires_grad=False,
+                            quant_type="nf4",
+                        ).to(target_device)
+                    elif target_dtype == torch.uint8 and param_dtype == torch.uint8:
+                        quantized_stats = {}
+                        for k, v in state_dict.items():
+                            if base_layer_name + "." in k:
+                                quantized_stats[k] = v
+                        new_value = bnb.nn.Params4bit.from_prequantized(
+                            data=param_value,
+                            quantized_stats=quantized_stats,
+                            requires_grad=False,
+                            device=target_device,
+                        )
+                        base_layer.weight = new_value
+                    else:
+                        raise ValueError(
+                            "The dtype of base layer and it's state in state_dict must in [torch.bfloat16, torch.uint8]."
+                        )
+
+    # TODO
     def _unload_and_optionally_merge(
         self,
         merge=True,
@@ -382,12 +383,10 @@ class SQALoraModel(nn.Module):
 
         return self.model
 
-    def merge_and_unload(
-        self, progressbar: bool = False, safe_merge: bool = False):
+    # TODO
+    def merge_and_unload(self, progressbar: bool = False, safe_merge: bool = False):
+        return self._unload_and_optionally_merge(progressbar=progressbar, safe_merge=safe_merge)
 
-        return self._unload_and_optionally_merge(
-            progressbar=progressbar, safe_merge=safe_merge
-        )
-
+    # TODO
     def unload(self):
         return self._unload_and_optionally_merge(merge=False)

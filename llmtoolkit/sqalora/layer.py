@@ -1,19 +1,17 @@
 import math
 import warnings
-from typing import Any, Optional, Union
+from typing import Any, Union
 
+import bitsandbytes as bnb
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from transformers.pytorch_utils import Conv1D
 
 from peft.utils.other import transpose
-import bitsandbytes as bnb
 
 from .utils import (
+    _get_mask_prune_magnitude,
     decomposeW2LinearWeightLR,
     mergeW2AB,
-    _get_mask_prune_magnitude,
 )
 
 
@@ -39,6 +37,8 @@ class SQALoraLayer(nn.Module):
         self.WL = nn.ModuleDict({})
         self.WR = nn.ModuleDict({})
         self.merged = False
+        self.quantized = False
+        self.quant_state = None
         self._disable_adapters = False
         self.merged_adapters = []
         self.lora_bias: bool = False
@@ -346,6 +346,7 @@ class Linear(SQALoraLayer):
     ):
         if self.quant_method == "nf4":
             if isinstance(self.base_layer, bnb.nn.Linear4bit):
+                self.quantized = True
                 return
             device = self.base_layer.weight.device
             weight_bf16 = self.base_layer.weight.detach().to(compute_dtype).contiguous()
@@ -359,7 +360,6 @@ class Linear(SQALoraLayer):
                 quant_type="nf4",
             ).to(device)
 
-            # 3. 利用 bitsandbytes 的 Params4bit 保存量化后权重
             qlinear.weight = bnb.nn.Params4bit(
                 weight_bf16,
                 requires_grad=False,
@@ -368,6 +368,9 @@ class Linear(SQALoraLayer):
             if bias is not None:
                 qlinear.bias = nn.Parameter(bias)
             self.base_layer = qlinear
+            self.quant_state = qlinear.weight.quant_state
+            print(self.base_layer.weight.data.dtype)
+        self.quantized = True
 
     @torch.no_grad()
     def dequantize(
@@ -376,6 +379,7 @@ class Linear(SQALoraLayer):
     ):
         if self.quant_method == "nf4":
             if not isinstance(self.base_layer, bnb.nn.Linear4bit):
+                self.quantize = False
                 return
 
             weight_bf16 = bnb.functional.dequantize_4bit(
@@ -396,6 +400,8 @@ class Linear(SQALoraLayer):
                 dense.bias.data.copy_(bias)
 
             self.base_layer = dense
+            self.quant_state = None
+        self.quantize = False
 
     @torch.no_grad()
     def apply_sparse_mask(self, sparse_mask: torch.Tensor):

@@ -1,17 +1,14 @@
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
-import warnings
 from dataclasses import dataclass, field
 from typing import Literal, Optional, Union
 
-from torch import nn
-
-from peft.config import PeftConfig, _check_and_remove_unused_kwargs, MIN_EXPECTED_CONFIG_KEYS
-
 
 @dataclass
-class SQALoraConfig(PeftConfig):
+class SQALoraConfig:
     """
     This is the configuration class to store the configuration of a [`SQALoraModel`].
 
@@ -83,72 +80,63 @@ class SQALoraConfig(PeftConfig):
     sparse_preserve_mode: int = field(
         default=0, metadata={"help": "Merge sparse W into A and B to preserve accuracy. Default is 0."}
     )
+    quant_method: str = field(
+        default="nf4", metadata={"help": "Quantization method to use, nf4 -> bnb nf4, mxfp4 -> xx."}
+    )
 
-    def __post_init__(self):
-        super().__post_init__()
-        self.target_modules = set(self.target_modules) if isinstance(self.target_modules, list) else self.target_modules
+    def save_pretrained(self, save_directory: str) -> None:
+        """
+        Save the configuration as a JSON file called *sqalora_config.json*
+        in `save_directory`.
+
+        Raises
+        ------
+        ValueError
+            If `save_directory` points to an existing file.
+        """
+        if os.path.isfile(save_directory):
+            raise ValueError(
+                f"`save_directory` ({save_directory}) is a file. "
+                "It must be a directory."
+            )
+        os.makedirs(save_directory, exist_ok=True)
+
+        cfg_dict = dataclasses.asdict(self)
+
+        if isinstance(self.target_modules, set):
+            cfg_dict["target_modules"] = sorted(self.target_modules)
+
+        file_name = os.path.join(save_directory, "sqalora_config.json")
+        with open(file_name, "w", encoding="utf-8") as f:
+            json.dump(cfg_dict, f, indent=2, ensure_ascii=False, sort_keys=True)
+
 
     @classmethod
-    def from_peft_type(cls, **kwargs):
-        r"""
-        This method loads the configuration of your adapter model from a set of kwargs.
-
-        The appropriate configuration type is determined by the `peft_type` argument. If `peft_type` is not provided,
-        the calling class type is instantiated.
-
-        Args:
-            kwargs (configuration keyword arguments):
-                Keyword arguments passed along to the configuration initialization.
+    def from_pretrained(cls, load_directory: str) -> SQALoraConfig:
         """
-        # Avoid circular dependency .. TODO: fix this with a larger refactor
-        from peft.mapping import PEFT_TYPE_TO_CONFIG_MAPPING
+        Load a configuration from *sqalora_config.json* located in
+        `load_directory` (or load_directory itself can be the full path
+        to the JSON file).
 
-        # TODO: this hack is needed to fix the following issue (on commit 702f937):
-        # if someone saves a default config and loads it back with `PeftConfig` class it yields to
-        # not loading the correct config class.
-        #
-        # from peft import AdaLoraConfig, PeftConfig
-        # peft_config = AdaLoraConfig()
-        # print(peft_config)
-        # >>> AdaLoraConfig(peft_type=<PeftType.ADALORA: 'ADALORA'>, auto_mapping=None, base_model_name_or_path=None,
-        # revision=None, task_type=None, inference_mode=False, r=8, target_modules=None, lora_alpha=8, lora_dropout=0.0, ...
-        #
-        # peft_config.save_pretrained("./test_config")
-        # peft_config = PeftConfig.from_pretrained("./test_config")
-        # print(peft_config)
-        # >>> PeftConfig(peft_type='ADALORA', auto_mapping=None, base_model_name_or_path=None, revision=None, task_type=None, inference_mode=False)
-
-        if "peft_type" in kwargs and kwargs["peft_type"] is not None:
-            peft_type = kwargs["peft_type"]
-            config_cls = PEFT_TYPE_TO_CONFIG_MAPPING[peft_type]
+        Returns
+        -------
+        SQALoraConfig
+        """
+        if os.path.isdir(load_directory):
+            file_name = os.path.join(load_directory, "sqalora_config.json")
         else:
-            config_cls = cls
+            file_name = load_directory
 
-        try:
-            config = config_cls(**kwargs)
-        except TypeError as exc:
-            # Here we potentially handle forward compatibility. Sometimes new keywords are added to configs, which makes
-            # new configs incompatible with older PEFT versions. We catch these and remove them to allow the program to
-            # continue, but warn the user about it.
-
-            # First check if the error is due to unexpected keyword arguments, we don't want to accidentally catch
-            # other TypeErrors.
-            if "got an unexpected keyword argument" not in str(exc):
-                raise exc
-
-            filtered_kwargs, unexpected_kwargs = _check_and_remove_unused_kwargs(config_cls, kwargs)
-            if not MIN_EXPECTED_CONFIG_KEYS.issubset(set(filtered_kwargs.keys())):
-                raise TypeError(
-                    f"The {cls.__name__} config that is trying to be loaded is missing required keys: "
-                    f"{MIN_EXPECTED_CONFIG_KEYS}."
-                )
-
-            warnings.warn(
-                f"Unexpected keyword arguments {sorted(unexpected_kwargs)} for class {config_cls.__name__}, these are "
-                "ignored. This probably means that you're loading a configuration file that was saved using a "
-                "higher version of the library and additional parameters have been introduced since. It is "
-                "highly recommended to upgrade the PEFT version before continuing (e.g. by running `pip install "
-                "-U peft`)."
+        if not os.path.isfile(file_name):
+            raise FileNotFoundError(
+                f"Could not find sqalora configuration at `{file_name}`."
             )
-            config = config_cls.from_peft_type(**filtered_kwargs)
-        return config
+
+        with open(file_name, encoding="utf-8") as f:
+            loaded_dict = json.load(f)
+
+        return cls(**loaded_dict)
+
+    def __post_init__(self):
+        if isinstance(self.target_modules, list):
+            self.target_modules = set(self.target_modules)

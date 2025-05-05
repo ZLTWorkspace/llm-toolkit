@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Optional, Union
+from typing import Union
 
-import bitsandbytes as bnb
 import torch
 
 from peft.import_utils import is_bnb_4bit_available, is_bnb_available
-from peft.tuners.tuners_utils import check_adapters_to_merge
-from peft.utils.integrations import dequantize_bnb_weight
 from peft.utils.other import transpose
 
 from .layer import SQALoraLayer
 from .utils import (
+    _get_mask_prune_magnitude,
     decomposeW2LinearWeightLR,
     mergeW2AB,
-    _get_mask_prune_magnitude,
 )
 
 

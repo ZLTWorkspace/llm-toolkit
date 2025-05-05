@@ -6,16 +6,12 @@ import torch
 import transformers
 from accelerate import Accelerator
 
-from .sparse import (
-    prune_magnitude,
-)
 from .utils import (
     get_world_size,
     gsi,
     plot_xy,
     print_rank_0,
     rank_0,
-    safe_dict2file,
     save_fig,
 )
 
@@ -227,36 +223,90 @@ Suppose the training will run n steps.
 |---25%---|--50%--|----------------|
 """
 
+
+def build_sparsity_schedule(
+        max_steps: int,
+        sparse_warmup: float,
+        sparse_ratio: float,
+        sparse_end: float,
+        sparse_steps: int = 1,
+        mode: str = "linear"
+) -> dict[int, float]:
+    """
+    Generate a sparsity training schedule.
+
+    If `sparse_warmup == sparse_end`, the model reaches the target
+    sparsity in a single step (at that exact point).
+    """
+
+    # ---------------- sanity checks ----------------
+    if not (0 <= sparse_warmup <= 1 and 0 <= sparse_end <= 1):
+        raise ValueError("sparse_warmup and sparse_end must be within [0, 1]")
+    if not (0 <= sparse_ratio <= 1):
+        raise ValueError("sparse_ratio must be within [0, 1]")
+    if sparse_steps <= 0:
+        raise ValueError("sparse_steps must be a positive integer")
+    if mode not in {"linear", "quadratic"}:
+        raise ValueError("mode must be either 'linear' or 'quadratic'")
+
+    # --------------- instant-sparsity path ---------------
+    if sparse_warmup == sparse_end:
+        instant_step = int(round(sparse_end * max_steps))
+        return {instant_step: sparse_ratio}
+
+    # --------------- gradual sparsity path ---------------
+    if sparse_warmup > sparse_end:
+        raise ValueError("sparse_warmup must be <= sparse_end")
+
+    start_step = int(round(sparse_warmup * max_steps))
+    end_step   = int(round(sparse_end   * max_steps))
+
+    interval = (end_step - start_step) / sparse_steps
+
+    schedule = {}
+    for i in range(sparse_steps + 1):
+        t_global = int(round(start_step + i * interval))
+
+        progress = i / sparse_steps
+        ratio = (sparse_ratio * progress if mode == "linear"
+                 else sparse_ratio * (progress ** 2))
+
+        if i == sparse_steps:          # clamp final value
+            ratio = sparse_ratio
+
+        schedule[t_global] = ratio
+
+    return schedule
+
 # TODO: check if the model is SQALoraModel
 class SparseCallbackBase(transformers.TrainerCallback):
     def __init__(
         self,
         model,
-        sparsity_ratio: float = 0.5,
-        sparse_warmup_ratio: float = 0.5,
-        sparse_warmup_steps: int = 2,
+        sparse_ratio: float = 0.5,
+        sparse_warmup: float = 0.1,
+        sparse_end: float = 0.3,
+        sparse_steps: int = 2,
         sparse_prune_largest: bool = False,
     ):
         self.model = model
-        self.sparsity_ratio = sparsity_ratio
-        self.sparse_warmup_ratio = sparse_warmup_ratio
-        self.sparse_warmup_steps = sparse_warmup_steps
+        self.sparse_ratio = sparse_ratio
+        self.sparse_warmup = sparse_warmup
+        self.sparse_end = sparse_end
+        self.sparse_steps = sparse_steps
         self.sparse_prune_largest = sparse_prune_largest
         self.sparse_schedule = {}
 
-    def create_sparse_schedule(self, max_steps: int):
-        max_sparse_warmup = max_steps * self.sparse_warmup_ratio
-        sparse_step_unit = max_sparse_warmup / self.sparse_warmup_steps
-        sparsity_ratio_unit = self.sparsity_ratio / self.sparse_warmup_steps
-        for i in range(self.sparse_warmup_steps):
-            self.sparse_schedule[int(sparse_step_unit * (i + 1))] = (
-                sparsity_ratio_unit * (i + 1)
-            )
-        print_rank_0(f"sparse schedule created as : {self.sparse_schedule}")
-
     def on_train_begin(self, args, state, control, **kwargs):
         max_steps = state.max_steps
-        self.create_sparse_schedule(max_steps)
+        self.sparse_schedule = build_sparsity_schedule(
+            max_steps=max_steps,
+            sparse_warmup=self.sparse_warmup,
+            sparse_end=self.sparse_end,
+            sparse_ratio=self.sparse_ratio,
+            sparse_steps=self.sparse_steps
+        )
+        print_rank_0(f"sparse schedule created as : {self.sparse_schedule}")
 
     def on_step_begin(self, args, state, control, **kwargs):
         step = state.global_step

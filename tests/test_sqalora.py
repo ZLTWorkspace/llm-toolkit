@@ -1,18 +1,15 @@
-from llmtoolkit import print_rank_0
-from llmtoolkit.sqalora.config import SQALoraConfig
 import torch
 import torch.nn as nn
-
-from llmtoolkit.sqalora.layer import Linear
-
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
 )
 
-from llmtoolkit.sqalora.model import SQALoraModel
+from llmtoolkit import print_rank_0
 from llmtoolkit.sqalora.config import SQALoraConfig
+from llmtoolkit.sqalora.layer import Linear
+from llmtoolkit.sqalora.model import SQALoraModel
+
 
 BASEMODEL = "/hpc2hdd/home/lzhang330/asset/Llama-2-7b-chat-hf"
 
@@ -121,38 +118,20 @@ def test_sqalora_model(sparse_preserve_mode: int):
     }
     model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_kwargs["pretrained_model_name_or_path"])
+    tokenizer.pad_token = tokenizer.eos_token
 
     model = SQALoraModel(model=model, config=config)
     model.to("cuda")
-    model.prune(sparsity_ratio=0.25)
+    model.eval()
+    model.prune(sparsity_ratio=0.1)
     print_rank_0(model.calculate_sparsity())
     print_rank_0(model)
-    model.eval()
-    tokenizer.pad_token = tokenizer.eos_token
-
     generate(model, tokenizer)
-
+    model.prune(sparsity_ratio=0.2)
+    print_rank_0(model.calculate_sparsity())
+    print_rank_0(model)
+    generate(model, tokenizer)
     model.save_pretrained(f"sqalora_model_sparse_preserve_mode_{sparse_preserve_mode}")
-
-
-def test_sqalora_model_load(sparse_preserve_mode: int):
-    pretrained_model_kwargs = {
-        "pretrained_model_name_or_path": BASEMODEL,
-        "attn_implementation": "flash_attention_2",
-        "torch_dtype": torch.bfloat16,
-    }
-    model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_kwargs["pretrained_model_name_or_path"])
-    model = SQALoraModel.from_pretrained(
-        model=model, peft_model_name_or_path=f"sqalora_model_sparse_preserve_mode_{sparse_preserve_mode}"
-    )
-    model.to("cuda")
-    print_rank_0(model)
-    print_rank_0(model.calculate_sparsity())
-    model.eval()
-    tokenizer.pad_token = tokenizer.eos_token
-
-    generate(model, tokenizer)
 
 
 def test_sqalora_model_quant_dequant():
@@ -189,9 +168,59 @@ def test_sqalora_model_quant_dequant():
     generate(model, tokenizer)
 
 
+def test_sqalora_model_state_dict(sparse_preserve_mode: int):
+    config = SQALoraConfig(
+        r=128,
+        lora_alpha=256,
+        lora_dropout=0.0,
+        target_modules=["q_proj"],
+        init_lora_weights=True,
+        use_rslora=False,
+        lora_bias=False,
+        sparse_preserve_mode=sparse_preserve_mode,
+    )
+
+    pretrained_model_kwargs = {
+        "pretrained_model_name_or_path": BASEMODEL,
+        "attn_implementation": "flash_attention_2",
+        "torch_dtype": torch.bfloat16,
+    }
+    model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_kwargs["pretrained_model_name_or_path"])
+
+    model = SQALoraModel(model=model, config=config)
+    model.to("cuda")
+    model.quantize()
+    state_dict = model.state_dict()
+
+    for n, m in state_dict.items():
+        print(n)
+
+
+def test_sqalora_model_load(sparse_preserve_mode: int):
+    pretrained_model_kwargs = {
+        "pretrained_model_name_or_path": BASEMODEL,
+        "attn_implementation": "flash_attention_2",
+        "torch_dtype": torch.bfloat16,
+    }
+    model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_kwargs["pretrained_model_name_or_path"])
+    tokenizer.pad_token = tokenizer.eos_token
+    model = SQALoraModel.from_pretrained(
+        model=model, sqalora_model_name_or_path=f"sqalora_model_sparse_preserve_mode_{sparse_preserve_mode}"
+    )
+    model.to("cuda")
+    model.eval()
+    print_rank_0(model)
+    print_rank_0(model.calculate_sparsity())
+    generate(model, tokenizer)
+    model.prune(sparsity_ratio=0.3)
+    print_rank_0(model.calculate_sparsity())
+    print_rank_0(model)
+    generate(model, tokenizer)
+
+
 if __name__ == "__main__":
-    test_sqalora_model_quant_dequant()
-    exit()
     test_sqalora_config()
     for i in [0, 1, 2]:
         test_sqalora_linear(i)

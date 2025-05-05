@@ -17,9 +17,9 @@ from .arguments import (
     get_unique_key,
 )
 from .callbacks import (
-    SparseCallbackBase,
     EmptycacheCallback,
     PT_ProfCallback,
+    SparseCallbackBase,
     StepInfoCallback,
 )
 from .dataset import (
@@ -93,9 +93,10 @@ def train(
         trainer.add_callback(
             SparseCallbackBase(
                 model=model,
-                sparsity_ratio=training_args.sparsity_ratio,
-                sparse_warmup_ratio=training_args.sparse_warmup_ratio,
-                sparse_warmup_steps=training_args.sparse_warmup_steps,
+                sparse_ratio=training_args.sparse_ratio,
+                sparse_warmup=training_args.sparse_warmup,
+                sparse_end=training_args.sparse_end,
+                sparse_steps=training_args.sparse_steps,
                 sparse_prune_largest=training_args.sparse_prune_largest,
             )
         )

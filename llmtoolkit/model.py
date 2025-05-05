@@ -178,7 +178,7 @@ def peft_model(
             config = VeraConfig(r=lora_rank, target_modules=modules)
             _peft_model = get_peft_model(model, config)
         elif peft_method == "sqalora":
-            from .sqalora import SQALoraModel, SQALoraConfig
+            from .sqalora import SQALoraConfig, SQALoraModel
             config = SQALoraConfig(
                 r=lora_rank,
                 lora_alpha=int(lora_scale * lora_rank),

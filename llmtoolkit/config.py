@@ -20,9 +20,10 @@ class QuantConfig:
 
 @dataclass
 class SparseConfig:
-    sparsity_ratio: float
-    sparse_warmup_ratio: float
-    sparse_warmup_steps: int
+    sparse_ratio: float
+    sparse_warmup: float
+    sparse_end: float
+    sparse_steps: int
     sparse_preserve_accuracy: bool
     sparse_prune_largest: bool
     sparse_n: int
