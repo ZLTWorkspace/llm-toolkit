@@ -132,15 +132,15 @@ class AdamW_lorafa(Optimizer):
                     if len(param_list) == 2:
                         state["step"] = 0
                         # Exponential moving average of gradient values
-                        state["exp_avg_B"] = torch.zeros_like(param_list[1], device=param_list[1].device)
+                        state["exp_avg_B"] = torch.zeros_like(param_list[1])
                         # Exponential moving average of squared gradient values
-                        state["exp_avg_sq_B"] = torch.zeros_like(param_list[1], device=param_list[1].device)
+                        state["exp_avg_sq_B"] = torch.zeros_like(param_list[1])
                     else:
                         state["step"] = 0
                         # Exponential moving average of gradient values
-                        state["exp_avg"] = torch.zeros_like(p, device=p.device)
+                        state["exp_avg"] = torch.zeros_like(p)
                         # Exponential moving average of squared gradient values
-                        state["exp_avg_sq"] = torch.zeros_like(p, device=p.device)
+                        state["exp_avg_sq"] = torch.zeros_like(p)
 
                 if len(param_list) == 2:
                     A = param_list[0]

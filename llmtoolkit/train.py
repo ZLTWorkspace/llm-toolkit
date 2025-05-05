@@ -90,11 +90,11 @@ def train(
         sparse_named_mask_path = os.path.join(ckpt_dir, "named_mask.pth")
         print_rank_0(f"apply sparse according to {sparse_named_mask_path}")
         named_mask = torch.load(sparse_named_mask_path)
-        print_rank_0("weights before apply sparse: ")
-        print_pruned_params(model, named_mask)
+        # print_rank_0("weights before apply sparse: ")
+        # print_pruned_params(model, named_mask)
         apply_sparse(model, named_mask)
-        print_rank_0("weights after apply sparse: ")
-        print_pruned_params(model, named_mask)
+        # print_rank_0("weights after apply sparse: ")
+        # print_pruned_params(model, named_mask)
 
     # TODO: rename training_args.adamw
     if training_args.adamw and isinstance(model, PeftModel):
