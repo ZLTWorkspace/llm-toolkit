@@ -2,6 +2,7 @@ import argparse
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import bitsandbytes as bnb
 
 from llmtoolkit import (
     evaluate_JIT,
@@ -15,8 +16,13 @@ def eval_sqalora(pretrained_model_name_or_path, peft_model_name_or_path, task):
         "pretrained_model_name_or_path": pretrained_model_name_or_path,
         "attn_implementation": "flash_attention_2",
         "torch_dtype": torch.bfloat16,
+        # "load_in_4bit": True
     }
     model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
+    for name, module in model.named_modules():
+        if isinstance(module, bnb.nn.Linear4bit):
+            print(module.weight.shape)
+
     tokenizer = AutoTokenizer.from_pretrained(peft_model_name_or_path)
     model.resize_token_embeddings(len(tokenizer))
 
@@ -34,8 +40,6 @@ def eval_sqalora(pretrained_model_name_or_path, peft_model_name_or_path, task):
     results["task"] = task
     results["accuracy"] = acc
     safe_dict2file(results, "eval_result.txt")
-
-
 
 
 if __name__ == "__main__":
@@ -57,6 +61,12 @@ if __name__ == "__main__":
         type=str,
         default="mmlu",
         help="Evaluation task. Default: mmlu"
+    )
+    parser.add_argument(
+        "--SQAT",
+        type=bool,
+        default=False,
+        help="Evaluate SQAT checkpoints"
     )
 
     args = parser.parse_args()

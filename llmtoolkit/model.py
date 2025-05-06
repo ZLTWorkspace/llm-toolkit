@@ -26,7 +26,6 @@ from peft.tuners.lora import LoraLayer
 
 from .config import (
     PEFTConfig,
-    QuantConfig,
 )
 from .utils import (
     is_ipex_available,
@@ -86,6 +85,7 @@ def peft_model(
     lora_scale: float,
     init_lora_weights: str,
     sparse_preserve_mode: int,
+    quant_method: str,
 ):
     if peft_method in ["lora", "lorafa", "vera", "dora", "sqalora"]:
         attention_modules = [
@@ -185,6 +185,7 @@ def peft_model(
                 target_modules=modules,
                 init_lora_weights=init_lora_weights if init_lora_weights is not None else True,
                 sparse_preserve_mode = sparse_preserve_mode,
+                quant_method = quant_method,
             )
             _peft_model = SQALoraModel(model, config)
     elif peft_method == "prefix":
@@ -215,7 +216,8 @@ def peft_model(
 
 def get_accelerate_model(
     model_name_or_path: str,
-    quant_config: Optional[QuantConfig] = None,
+    quant: bool = False,
+    quant_method: Optional[str] = None,
     peft_config: Optional[PEFTConfig] = None,
     flash_attn: bool = True,
     compute_dtype: torch.dtype = torch.bfloat16,
@@ -235,15 +237,6 @@ def get_accelerate_model(
     if is_ipex_available() and torch.xpu.is_available():
         n_gpus = torch.xpu.device_count()
 
-    # load model in 16bit default
-    model_bits = (
-        quant_config.model_bits
-        if quant_config
-        else 32
-        if compute_dtype == torch.float32
-        else 16
-    )
-
     pretrained_model_kwargs = {
         "pretrained_model_name_or_path": model_name_or_path,
         "attn_implementation": attn_implementation,
@@ -254,24 +247,37 @@ def get_accelerate_model(
     elif parallelism == "pp":
         pretrained_model_kwargs.update({"device_map": "auto"})
 
-    if quant_config:
-        if quant_config.quant_method == "bnb":
+    if quant:
+        if quant_method == "nf4":
             pretrained_model_kwargs.update(
                 {
                     "quantization_config": BitsAndBytesConfig(
-                        load_in_4bit=model_bits == 4,
-                        load_in_8bit=model_bits == 8,
-                        llm_int8_threshold=6.0,
-                        llm_int8_has_fp16_weight=False,
+                        load_in_4bit=True,
                         bnb_4bit_compute_dtype=compute_dtype,
                         bnb_4bit_use_double_quant=False,
-                        bnb_4bit_quant_type=quant_config.bnb_quant_type,
+                        bnb_4bit_quant_type="nf4",
                         bnb_4bit_quant_storage="uint8",
                     )
                 }
             )
-        if quant_config.quant_method == "hqq":
-            raise NotImplementedError("HQQ is not supported yet")
+            pass
+        elif quant_method == "fp4":
+            pretrained_model_kwargs.update(
+                {
+                    "quantization_config": BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=compute_dtype,
+                        bnb_4bit_use_double_quant=False,
+                        bnb_4bit_quant_type="fp4",
+                        bnb_4bit_quant_storage="uint8",
+                    )
+                }
+            )
+            pass
+        elif quant_method == "hqq4":
+            raise ValueError(f"Unsupported quantization method {quant_method}")
+        else:
+            raise ValueError(f"Unsupported quantization method {quant_method}")
     else:
         pretrained_model_kwargs.update(
             {
@@ -281,12 +287,6 @@ def get_accelerate_model(
 
     print_rank_0(f"Loading base model from {model_name_or_path}.")
     model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
-
-    if compute_dtype == torch.float16 and model_bits == 4:
-        if torch.cuda.is_bf16_supported():
-            print_rank_0(
-                "Your GPU supports bfloat16, you can accelerate training with the argument --bf16"
-            )
 
     if compute_dtype == torch.float16 and (
         is_ipex_available() and torch.xpu.is_available()
@@ -307,7 +307,7 @@ def get_accelerate_model(
 
     auto_add_special_tokens(model, tokenizer)
 
-    if quant_config:
+    if quant:
         model = prepare_model_for_kbit_training(
             model, use_gradient_checkpointing=gradient_checkpointing
         )
@@ -321,6 +321,7 @@ def get_accelerate_model(
             peft_config.lora_scale,
             peft_config.init_lora_weights,
             peft_config.sparse_preserve_mode,
+            quant_method,
         )
 
         if flash_attn or deepspeed is not None:

@@ -69,22 +69,16 @@ class ModelArguments:
         default=False,
         metadata={"help": "Use flash attention? default = False"},
     )
-    quant: str = field(
-        default=None,
+    quant: bool = field(
+        default=False,
         metadata={
-            "help": "Quantize base model. Default is None. Choose from [bnb, hqq (hqq is not supported yet)]."
+            "help": "Quantize base model. Default is False."
         },
     )
-    quant_type: str = field(
+    quant_method: str = field(
         default="nf4",
         metadata={
-            "help": "Quantization data type to use. Should be one of `fp4` or `nf4`."
-        },
-    )
-    bits: int = field(
-        default=16,
-        metadata={
-            "help": "How many bits to use. In general we use --bf16 training, here the bits is 16."
+            "help": "Quantization method to use. Choose from [bnb, hqq (hqq is not supported yet)]."
         },
     )
 
@@ -169,7 +163,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={"help": "The output dir for logs and checkpoints"},
     )
     optim: str = field(
-        default="adamw_hf",
+        default="adamw_torch",
         metadata={
             "help": "The optimizer to be used. Will be no-effective when training_args.adamw is not None."
         },
@@ -312,6 +306,10 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     sparse_prune_largest: bool = field(
         default=False,
         metadata={"help": "If True, prune the largest weights, otherwise prune the smallest weights. Default is False."},
+    )
+    SQAT: bool = field(
+        default=False,
+        metadata={"help": "If True, do Sparse-Quantization-Aware training."},
     )
     unify_save: bool = field(
         default=False,

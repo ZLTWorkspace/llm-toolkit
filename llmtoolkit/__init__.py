@@ -16,7 +16,6 @@ from .callbacks import (
 )
 from .config import (
     PEFTConfig,
-    QuantConfig,
 )
 from .dataset import (
     build_data_module,
@@ -82,7 +81,6 @@ __all__ = [
     "ModelArguments",
     "PEFTConfig",
     "PT_ProfCallback",
-    "QuantConfig",
     "Seq2SeqTrainer_optim",
     "StepInfoCallback",
     "TrainingArguments",

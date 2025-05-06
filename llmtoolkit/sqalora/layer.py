@@ -277,41 +277,10 @@ class Linear(SQALoraLayer):
         return result
 
     @torch.no_grad()
-    def prune(
-        self,
-        sparsity_ratio: float,
-        prune_n=0,
-        prune_m=0,
-        offload=True,
-        sparse_prune_largest=False,
-    ):
-        """
-        Prune the weights of the base layer to make them sparse.
-        For now we only support magnitude pruning.
-        The prune func should be in custome Linear layer, since it needs to handle when base layer is quantized.
-        The prune func should:
-        1. sparse the base layer weights
-        2. return sparse mask (no need to return name of the layer)
-        3. update the WL and WR weights if sparse_preserve is True
-        """
-        sparse_preserve_mode = self.sparse_preserve_mode
-        if sparsity_ratio > 1 or sparsity_ratio < 0:
-            raise ValueError("sparsity_ratio should be in (0,1).")
-        if (prune_n, prune_m) not in [(0, 0), (2, 4), (4, 8), (8, 16), (16, 32), (32, 64)]:
-            raise ValueError("structured pruning only support (2,4), (4,8), (8,16), (16,32),(32,64) for now.")
-        if sparse_preserve_mode not in [0, 1, 2]:
-            raise ValueError("sparse_preserve_mode should be in (0,1,2).")
-        self.merge()
+    def apply_sparse_and_update_WL_WR(self, sparse_mask: torch.Tensor):
+        #TODO: check if the base_layer.weight.data is float16 or bfloat16
         base_layer = self.get_base_layer()
-        sparse_mask = _get_mask_prune_magnitude(
-            base_layer.weight.data,
-            sparsity_ratio,
-            prune_n,
-            prune_m,
-            sparse_prune_largest,
-            offload,
-        )
-        self.unmerge()
+        sparse_preserve_mode = self.sparse_preserve_mode
         if sparse_preserve_mode == 0:
             self.apply_sparse_mask(sparse_mask)
         elif sparse_preserve_mode == 1:
@@ -340,14 +309,85 @@ class Linear(SQALoraLayer):
             raise ValueError(f"Unknown sparse preserve mode {sparse_preserve_mode}")
 
     @torch.no_grad()
+    def prune(
+        self,
+        sparsity_ratio: float,
+        prune_n=0,
+        prune_m=0,
+        offload=True,
+        sparse_prune_largest=False,
+    ):
+        """
+        Prune the weights of the base layer to make them sparse.
+        For now we only support magnitude pruning.
+        The prune func should be in custome Linear layer, since it needs to handle when base layer is quantized.
+        The prune func should:
+        1. sparse the base layer weights
+        2. return sparse mask (no need to return name of the layer)
+        3. update the WL and WR weights if sparse_preserve is True
+        4. maintain quantization status before and after pruning
+        """
+        sparse_preserve_mode = self.sparse_preserve_mode
+        if sparsity_ratio > 1 or sparsity_ratio < 0:
+            raise ValueError("sparsity_ratio should be in (0,1).")
+        if (prune_n, prune_m) not in [(0, 0), (2, 4), (4, 8), (8, 16), (16, 32), (32, 64)]:
+            raise ValueError("structured pruning only support (2,4), (4,8), (8,16), (16,32),(32,64) for now.")
+        if sparse_preserve_mode not in [0, 1, 2]:
+            raise ValueError("sparse_preserve_mode should be in (0,1,2).")
+        if self.quantized:
+            self.dequantize()
+            # when sparse_prune_largest is True, we only perform sparse on base weight without merging
+            # since sparse_prune_largest is mainly designed for quantized tiles
+            if sparse_prune_largest:
+                base_layer = self.get_base_layer()
+                sparse_mask = _get_mask_prune_magnitude(
+                    base_layer.weight.data,
+                    sparsity_ratio,
+                    prune_n,
+                    prune_m,
+                    sparse_prune_largest,
+                    offload,
+                )
+                self.apply_sparse_and_update_WL_WR(sparse_mask)
+            else:
+                self.merge()
+                base_layer = self.get_base_layer()
+                sparse_mask = _get_mask_prune_magnitude(
+                    base_layer.weight.data,
+                    sparsity_ratio,
+                    prune_n,
+                    prune_m,
+                    sparse_prune_largest,
+                    offload,
+                )
+                self.unmerge()
+                self.apply_sparse_and_update_WL_WR(sparse_mask)
+            self.quantize()
+        else:
+            self.merge()
+            base_layer = self.get_base_layer()
+            sparse_mask = _get_mask_prune_magnitude(
+                base_layer.weight.data,
+                sparsity_ratio,
+                prune_n,
+                prune_m,
+                sparse_prune_largest,
+                offload,
+            )
+            self.unmerge()
+            self.apply_sparse_and_update_WL_WR(sparse_mask)
+
+
+    @torch.no_grad()
     def quantize(
         self,
         compute_dtype: torch.dtype = torch.bfloat16,
     ):
+        #TODO: add more types to check
+        if isinstance(self.base_layer, bnb.nn.Linear4bit):
+            self.quantized = True
+            return
         if self.quant_method == "nf4":
-            if isinstance(self.base_layer, bnb.nn.Linear4bit):
-                self.quantized = True
-                return
             device = self.base_layer.weight.device
             weight_bf16 = self.base_layer.weight.detach().to(compute_dtype).contiguous()
             bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
@@ -369,18 +409,26 @@ class Linear(SQALoraLayer):
                 qlinear.bias = nn.Parameter(bias)
             self.base_layer = qlinear
             self.quant_state = qlinear.weight.quant_state
-            print(self.base_layer.weight.data.dtype)
-        self.quantized = True
+            self.quantized = True
+        elif self.quant_method == "fp4":
+            raise ValueError("Not support yet.")
+        elif self.quant_method == "hqq":
+            raise ValueError("Not support yet.")
+        else:
+            raise ValueError("Only nf4, fp4, hqq are supported.")
+        print(self.base_layer.weight.shape)
 
     @torch.no_grad()
     def dequantize(
         self,
         compute_dtype: torch.dtype = torch.bfloat16,
     ):
+        if isinstance(self.base_layer, nn.Linear):
+            self.quantized = False
+            return
         if self.quant_method == "nf4":
             if not isinstance(self.base_layer, bnb.nn.Linear4bit):
-                self.quantize = False
-                return
+                raise RuntimeError(f"The quantization method is {self.quant_method}, however the type of base_layer is {type(self.base_layer)}.")
 
             weight_bf16 = bnb.functional.dequantize_4bit(
                 self.base_layer.weight.data, self.base_layer.weight.quant_state
@@ -401,7 +449,13 @@ class Linear(SQALoraLayer):
 
             self.base_layer = dense
             self.quant_state = None
-        self.quantize = False
+            self.quantized = False
+        elif self.quant_method == "fp4":
+            raise ValueError("Not support yet.")
+        elif self.quant_method == "hqq":
+            raise ValueError("Not support yet.")
+        else:
+            raise ValueError("Only nf4, fp4, hqq are supported.")
 
     @torch.no_grad()
     def apply_sparse_mask(self, sparse_mask: torch.Tensor):

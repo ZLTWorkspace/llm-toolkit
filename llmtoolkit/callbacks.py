@@ -225,21 +225,30 @@ Suppose the training will run n steps.
 
 
 def build_sparsity_schedule(
-        max_steps: int,
-        sparse_warmup: float,
-        sparse_ratio: float,
-        sparse_end: float,
-        sparse_steps: int = 1,
-        mode: str = "linear"
+    max_steps: int,
+    sparse_warmup: float,
+    sparse_ratio: float,
+    sparse_end: float,
+    sparse_steps: int = 1,
+    mode: str = "linear",
 ) -> dict[int, float]:
     """
-    Generate a sparsity training schedule.
+    Generate a sparsity-training schedule.
 
-    If `sparse_warmup == sparse_end`, the model reaches the target
-    sparsity in a single step (at that exact point).
+    Parameters
+    ----------
+    max_steps      : total training steps
+    sparse_warmup  : relative point (0-1) where sparsity starts
+    sparse_ratio   : target sparsity (0-1)
+    sparse_end     : relative point (0-1) where target sparsity is reached
+    sparse_steps   : number of pruning milestones (≥1)
+    mode           : 'linear' | 'quadratic'
+
+    Returns
+    -------
+    dict[int, float] : {global_step : sparsity_ratio}
     """
-
-    # ---------------- sanity checks ----------------
+    # --------------------------- sanity checks ---------------------------
     if not (0 <= sparse_warmup <= 1 and 0 <= sparse_end <= 1):
         raise ValueError("sparse_warmup and sparse_end must be within [0, 1]")
     if not (0 <= sparse_ratio <= 1):
@@ -247,31 +256,37 @@ def build_sparsity_schedule(
     if sparse_steps <= 0:
         raise ValueError("sparse_steps must be a positive integer")
     if mode not in {"linear", "quadratic"}:
-        raise ValueError("mode must be either 'linear' or 'quadratic'")
-
-    # --------------- instant-sparsity path ---------------
-    if sparse_warmup == sparse_end:
-        instant_step = int(round(sparse_end * max_steps))
-        return {instant_step: sparse_ratio}
-
-    # --------------- gradual sparsity path ---------------
+        raise ValueError("mode must be 'linear' or 'quadratic'")
     if sparse_warmup > sparse_end:
         raise ValueError("sparse_warmup must be <= sparse_end")
+    # when we need 1-step sparse - case 1
+    if sparse_warmup == sparse_end:
+        step = int(round(sparse_end * max_steps))
+        return {step: sparse_ratio}
 
     start_step = int(round(sparse_warmup * max_steps))
     end_step   = int(round(sparse_end   * max_steps))
 
-    interval = (end_step - start_step) / sparse_steps
+    schedule: dict[int, float] = {}
 
-    schedule = {}
-    for i in range(sparse_steps + 1):
+    # when we need 1-step sparse - case 2
+    if sparse_steps == 1:
+        schedule[start_step] = sparse_ratio
+        return schedule
+
+    interval = (end_step - start_step) / (sparse_steps - 1)
+
+    for i in range(sparse_steps):               # i = 0 … sparse_steps-1
         t_global = int(round(start_step + i * interval))
 
-        progress = i / sparse_steps
-        ratio = (sparse_ratio * progress if mode == "linear"
-                 else sparse_ratio * (progress ** 2))
+        progress = (i + 1) / sparse_steps       # 1/s, 2/s, …, 1
+        ratio = (
+            sparse_ratio * progress
+            if mode == "linear"
+            else sparse_ratio * (progress ** 2)
+        )
 
-        if i == sparse_steps:          # clamp final value
+        if i == sparse_steps - 1:
             ratio = sparse_ratio
 
         schedule[t_global] = ratio
@@ -288,6 +303,7 @@ class SparseCallbackBase(transformers.TrainerCallback):
         sparse_end: float = 0.3,
         sparse_steps: int = 2,
         sparse_prune_largest: bool = False,
+        SQAT = False,
     ):
         self.model = model
         self.sparse_ratio = sparse_ratio
@@ -295,6 +311,7 @@ class SparseCallbackBase(transformers.TrainerCallback):
         self.sparse_end = sparse_end
         self.sparse_steps = sparse_steps
         self.sparse_prune_largest = sparse_prune_largest
+        self.SQAT = SQAT
         self.sparse_schedule = {}
 
     def on_train_begin(self, args, state, control, **kwargs):
@@ -307,6 +324,11 @@ class SparseCallbackBase(transformers.TrainerCallback):
             sparse_steps=self.sparse_steps
         )
         print_rank_0(f"sparse schedule created as : {self.sparse_schedule}")
+        if self.SQAT:
+            print_rank_0("Sparse-Quantization-Aware Training is triggered, on step 0 the unquantized model will be sparsed, then it will be quantized the whole training session.")
+            sparsity4step0 = self.sparse_schedule.pop(min(self.sparse_schedule.keys()))
+            self.model.prune(sparsity_ratio = sparsity4step0, sparse_prune_largest = self.sparse_prune_largest)
+            self.model.quantize()
 
     def on_step_begin(self, args, state, control, **kwargs):
         step = state.global_step

@@ -83,6 +83,10 @@ class SQALoraConfig:
     quant_method: str = field(
         default="nf4", metadata={"help": "Quantization method to use, nf4 -> bnb nf4, mxfp4 -> xx."}
     )
+    quantization: bool = field(
+        default=False,
+        metadata={"help": "Whether to quantize the base weight when generating SQALoramodel. This is useful when from_pretrained."},
+    )
 
     def save_pretrained(self, save_directory: str) -> None:
         """

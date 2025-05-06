@@ -4,7 +4,6 @@ import torch
 
 from llmtoolkit import (
     PEFTConfig,
-    QuantConfig,
     build_data_module,
     get_accelerate_model,
     get_args,
@@ -15,15 +14,7 @@ from llmtoolkit import (
 
 
 model_args, data_args, training_args = get_args()
-
-if model_args.quant:
-    quant_config = QuantConfig(
-        quant_method=model_args.quant,
-        model_bits=model_args.bits,
-        bnb_quant_type=model_args.quant_type,
-    )
-else:
-    quant_config = None
+args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
 if model_args.peft:
     peft_config = PEFTConfig(
@@ -37,11 +28,11 @@ if model_args.peft:
 else:
     peft_config = None
 
-args = argparse.Namespace(**vars(model_args), **vars(data_args), **vars(training_args))
 
 model, tokenizer = get_accelerate_model(
     args.model_name_or_path,
-    quant_config,
+    args.quant,
+    args.quant_method,
     peft_config,
     flash_attn=args.flash_attn,
     compute_dtype=torch.bfloat16,
@@ -66,4 +57,5 @@ train(
     data_module["data_collator"],
     training_args,
     get_unique_key(model_args, data_args, training_args),
+    lora_scale = args.lora_scale,
 )

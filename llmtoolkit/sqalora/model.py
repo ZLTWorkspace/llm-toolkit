@@ -49,6 +49,8 @@ class SQALoraModel(nn.Module):
         self.sqalora_config = sqalora_config
         self.targeted_module_names: list[str] = []
         self.inject_adapter(self.model, sqalora_config)
+        if self.sqalora_config.quantization:
+            self.quantize()
 
     def forward(self, *args: Any, **kwargs: Any):
         return self.model.forward(*args, **kwargs)
@@ -212,16 +214,19 @@ class SQALoraModel(nn.Module):
                 )
 
     def quantize(self):
+        #TODO: check if the model is on GPU
         for name, module in self.model.named_modules():
             if isinstance(module, Linear):
                 print_rank_0(f"Quantizing layer - {name}")
                 module.quantize()
+        self.sqalora_config.quantization = True
 
     def dequantize(self):
         for name, module in self.model.named_modules():
             if isinstance(module, Linear):
                 print_rank_0(f"Dequantizing layer - {name}")
                 module.dequantize()
+        self.sqalora_config.quantization = False
 
     @torch.no_grad()
     def calculate_sparsity(self, eps=1e-4) -> float:
@@ -259,6 +264,7 @@ class SQALoraModel(nn.Module):
         if not os.path.isfile(safetensors_path):
             raise FileNotFoundError(f"Cannot find model.safetensors in {safetensors_path}")
         state_dict = load_file(safetensors_path)
+        print_rank_0(state_dict.keys())
 
         # process WL and WR
         for full_key in list(state_dict.keys()):
@@ -293,12 +299,12 @@ class SQALoraModel(nn.Module):
                 )
                 lr_dict.update({step_name: new_linear})
 
-        # missing, unexpected = sqalora_model.model.load_state_dict(state_dict, strict=False)
-        missing, unexpected = load_model(sqalora_model.model, safetensors_path)
+        # missing, unexpected = sqalora_model.load_state_dict(state_dict, strict=False)
+        missing, unexpected = load_model(sqalora_model.model, safetensors_path, strict=False)
         if len(unexpected) > 0:
-            warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {unexpected[:5]} ...")
+            warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {unexpected[:10]} ...")
         if len(missing) > 0:
-            warnings.warn(f"there are {len(missing)} parameters that missing: {missing[:5]} ...")
+            warnings.warn(f"there are {len(missing)} parameters that missing: {missing[:10]} ...")
 
         quant_method = sqalora_config.quant_method.lower()
         _quant_load_handlers = {
@@ -311,12 +317,15 @@ class SQALoraModel(nn.Module):
 
     @staticmethod
     def _load_nf4_weights(model: SQALoraModel, state_dict: dict[str, torch.Tensor]):
+        print_rank_0(state_dict.keys())
         for name, module in model.named_modules():
             if isinstance(module, Linear):
                 base_layer = module.get_base_layer()
                 base_layer_name = _get_module_name(model, base_layer)
+                base_layer_name = f"{base_layer_name}.weight"
+                print_rank_0(base_layer_name)
                 if base_layer_name in state_dict:
-                    print(f"Processing {base_layer_name}")
+                    print_rank_0(f"Processing {base_layer_name}")
                     param_value = state_dict[base_layer_name]
                     param_dtype = param_value.dtype
                     target_device = base_layer.device

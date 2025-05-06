@@ -50,20 +50,18 @@ def train(
     data_collator,
     training_args: TrainingArguments,
     key: str,
+    **kwargs,
 ):
     set_seed(training_args.seed)
     if training_args.deepspeed:
         training_args.distributed_state.distributed_type = DistributedType.DEEPSPEED
 
-    trainable_param, all_param, trainable_rate = print_trainable_parameters(
-        model, training_args.debug_mode
-    )
+    trainable_param, all_param, trainable_rate = print_trainable_parameters(model, training_args.debug_mode)
 
     # TODO: rename training_args.adamw
-    if training_args.adamw and isinstance(model, PeftModel):
+    if training_args.adamw:
         trainer = Seq2SeqTrainer_optim(
-            lora_scale=model.peft_config["default"].lora_alpha
-            / model.peft_config["default"].r,
+            lora_scale=kwargs.get("lora_scale", 2),
             adamw=training_args.adamw,
             model=model,
             tokenizer=tokenizer,
@@ -98,6 +96,7 @@ def train(
                 sparse_end=training_args.sparse_end,
                 sparse_steps=training_args.sparse_steps,
                 sparse_prune_largest=training_args.sparse_prune_largest,
+                SQAT=training_args.SQAT,
             )
         )
 
@@ -140,9 +139,7 @@ def train(
             trainer.save_metrics("train", metrics)
             trainer.save_state()
             if training_args.unify_save and isinstance(trainer.model, PeftModel):
-                print_rank_0(
-                    f"merged model will be save at {os.path.join(training_args.output_dir, 'merged')}"
-                )
+                print_rank_0(f"merged model will be save at {os.path.join(training_args.output_dir, 'merged')}")
                 trainer.model = trainer.model.merge_and_unload()
                 trainer.save_model(os.path.join(training_args.output_dir, "merged"))
             else:
@@ -193,13 +190,9 @@ def train_cli(
     print_rank_0("model loaded")
     print_rank_0(model)
 
-    trainable_param, all_param, trainable_rate = print_trainable_parameters(
-        model, training_args.debug_mode
-    )
+    trainable_param, all_param, trainable_rate = print_trainable_parameters(model, training_args.debug_mode)
 
-    data_module = build_data_module(
-        tokenizer, data_args.dataset_name_or_path, data_args
-    )
+    data_module = build_data_module(tokenizer, data_args.dataset_name_or_path, data_args)
 
     trainer = BaseSeq2SeqTrainer(
         model=model,
