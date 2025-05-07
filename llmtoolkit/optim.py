@@ -66,44 +66,20 @@ class AdamW_lorafa(Optimizer):
                     n = name[:name.find("lora_B")] + "lora"
                     name_to_device[n] = p.device
 
-        # move状态到对应的gpu
-        # new_state = {}
-        # for key, state in self.state.items():
-        #     if isinstance(key, str):
-        #         if key not in name_to_device:
-        #             raise KeyError(f"Parameter name {key} not found in device mapping.")
-        #         device = name_to_device[key]
-        #     else:
-        #         device = key.device
-
-        #     new_state_entry = {}
-        #     for k, v in state.items():
-        #         if isinstance(v, torch.Tensor):
-        #             if v.device.type == "cpu":
-        #                 new_state_entry[k] = v.to(device)
-        #                 v.to(device)
-        #         else:
-        #             new_state_entry[k] = v
-        #     new_state[key] = new_state_entry
-
-        # self.state = new_state
-
-        for key in list(self.state.keys()):  # 使用list避免遍历时修改的问题
+        # move state to device
+        for key in list(self.state.keys()):
             state = self.state[key]
             
-            # 确定目标设备
             if isinstance(key, str):
                 if key not in name_to_device:
                     raise KeyError(f"Parameter name {key} not found in device mapping.")
                 device = name_to_device[key]
             else:
-                device = key.device  # 非命名参数使用原设备
+                device = key.device
 
-            # 遍历状态中的每个键值对
-            for k in list(state.keys()):  # 使用list避免遍历时修改的问题
+            for k in list(state.keys()):
                 v = state[k]
                 if isinstance(v, torch.Tensor):
-                    # 直接移动张量到目标设备并更新原状态
                     state[k] = v.to(device)
 
     @torch.no_grad()
