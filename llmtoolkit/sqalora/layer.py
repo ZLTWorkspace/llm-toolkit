@@ -416,7 +416,6 @@ class Linear(SQALoraLayer):
             raise ValueError("Not support yet.")
         else:
             raise ValueError("Only nf4, fp4, hqq are supported.")
-        print(self.base_layer.weight.shape)
 
     @torch.no_grad()
     def dequantize(

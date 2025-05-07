@@ -1,8 +1,8 @@
 import argparse
 
 import torch
+from accelerate import Accelerator
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import bitsandbytes as bnb
 
 from llmtoolkit import (
     evaluate_JIT,
@@ -16,13 +16,9 @@ def eval_sqalora(pretrained_model_name_or_path, peft_model_name_or_path, task):
         "pretrained_model_name_or_path": pretrained_model_name_or_path,
         "attn_implementation": "flash_attention_2",
         "torch_dtype": torch.bfloat16,
-        # "load_in_4bit": True
+        "device_map": "cuda",
     }
     model = AutoModelForCausalLM.from_pretrained(**pretrained_model_kwargs)
-    for name, module in model.named_modules():
-        if isinstance(module, bnb.nn.Linear4bit):
-            print(module.weight.shape)
-
     tokenizer = AutoTokenizer.from_pretrained(peft_model_name_or_path)
     model.resize_token_embeddings(len(tokenizer))
 
@@ -30,7 +26,6 @@ def eval_sqalora(pretrained_model_name_or_path, peft_model_name_or_path, task):
         model=model, sqalora_model_name_or_path=peft_model_name_or_path
     )
 
-    model.to("cuda")
     model.eval()
     acc = evaluate_JIT(task, model, tokenizer)
 
@@ -43,6 +38,8 @@ def eval_sqalora(pretrained_model_name_or_path, peft_model_name_or_path, task):
 
 
 if __name__ == "__main__":
+    accelerator = Accelerator()
+
     parser = argparse.ArgumentParser(description="Evaluate PEFT models")
     parser.add_argument(
         "--base_model_name_or_path",

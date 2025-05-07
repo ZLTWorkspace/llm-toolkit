@@ -215,6 +215,8 @@ class SQALoraModel(nn.Module):
 
     def quantize(self):
         #TODO: check if the model is on GPU
+        if self.device == "cpu" or self.model.device == "cpu":
+            print_rank_0("You are tring to quantize the model on cpu, which may cause errors. We recommend to quantize the model on GPU.")
         for name, module in self.model.named_modules():
             if isinstance(module, Linear):
                 print_rank_0(f"Quantizing layer - {name}")
@@ -245,8 +247,8 @@ class SQALoraModel(nn.Module):
     def save_pretrained(self, save_directory: str) -> None:
         if not os.path.exists(save_directory):
             os.makedirs(save_directory, exist_ok=True)
-        model_path = os.path.join(save_directory, "model.safetensors")
-        save_model(self.model, model_path)
+        model_path = os.path.join(save_directory, "sqalora_model.safetensors")
+        save_model(self, model_path)
         self.sqalora_config.save_pretrained(save_directory)
 
     @classmethod
@@ -260,11 +262,10 @@ class SQALoraModel(nn.Module):
         sqalora_config = SQALoraConfig.from_pretrained(sqalora_model_name_or_path)
         sqalora_model = cls(model, sqalora_config)
 
-        safetensors_path = os.path.join(sqalora_model_name_or_path, "model.safetensors")
+        safetensors_path = os.path.join(sqalora_model_name_or_path, "sqalora_model.safetensors")
         if not os.path.isfile(safetensors_path):
-            raise FileNotFoundError(f"Cannot find model.safetensors in {safetensors_path}")
+            raise FileNotFoundError(f"Cannot find sqalora_model.safetensors in {safetensors_path}")
         state_dict = load_file(safetensors_path)
-        print_rank_0(state_dict.keys())
 
         # process WL and WR
         for full_key in list(state_dict.keys()):
@@ -300,11 +301,14 @@ class SQALoraModel(nn.Module):
                 lr_dict.update({step_name: new_linear})
 
         # missing, unexpected = sqalora_model.load_state_dict(state_dict, strict=False)
-        missing, unexpected = load_model(sqalora_model.model, safetensors_path, strict=False)
+        missing, unexpected = load_model(sqalora_model, safetensors_path, strict=False)
         if len(unexpected) > 0:
-            warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {unexpected[:10]} ...")
+            warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {list(unexpected)[:10]} ...")
         if len(missing) > 0:
-            warnings.warn(f"there are {len(missing)} parameters that missing: {missing[:10]} ...")
+            warnings.warn(f"there are {len(missing)} parameters that missing: {list(missing)[:10]} ...")
+        #TODO: check here, the expect output is:
+        # unexpected only contains the quant_state, such as .absmax, .nested_absmax, .nested_quant_map, .quant_map, .quant_state.bitsandbytes__nf4
+        # missing is empty
 
         quant_method = sqalora_config.quant_method.lower()
         _quant_load_handlers = {
@@ -317,19 +321,17 @@ class SQALoraModel(nn.Module):
 
     @staticmethod
     def _load_nf4_weights(model: SQALoraModel, state_dict: dict[str, torch.Tensor]):
-        print_rank_0(state_dict.keys())
         for name, module in model.named_modules():
             if isinstance(module, Linear):
                 base_layer = module.get_base_layer()
                 base_layer_name = _get_module_name(model, base_layer)
                 base_layer_name = f"{base_layer_name}.weight"
-                print_rank_0(base_layer_name)
                 if base_layer_name in state_dict:
-                    print_rank_0(f"Processing {base_layer_name}")
+                    print_rank_0(f"Loading weight to {base_layer_name}")
                     param_value = state_dict[base_layer_name]
                     param_dtype = param_value.dtype
-                    target_device = base_layer.device
-                    target_dtype = base_layer.dtype
+                    target_device = base_layer.weight.device
+                    target_dtype = base_layer.weight.dtype
 
                     if target_dtype == torch.bfloat16 and param_dtype == torch.bfloat16:
                         base_layer.weight.copy_(param_value)
@@ -357,6 +359,8 @@ class SQALoraModel(nn.Module):
                         for k, v in state_dict.items():
                             if base_layer_name + "." in k:
                                 quantized_stats[k] = v
+                        print_rank_0(quantized_stats.keys())
+
                         new_value = bnb.nn.Params4bit.from_prequantized(
                             data=param_value,
                             quantized_stats=quantized_stats,
