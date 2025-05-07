@@ -59,12 +59,6 @@ if __name__ == "__main__":
         default="mmlu",
         help="Evaluation task. Default: mmlu"
     )
-    parser.add_argument(
-        "--SQAT",
-        type=bool,
-        default=False,
-        help="Evaluate SQAT checkpoints"
-    )
 
     args = parser.parse_args()
     eval_sqalora(args.base_model_name_or_path, args.peft_model_name_or_path, args.task)
