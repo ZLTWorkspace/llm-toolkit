@@ -7,6 +7,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
+    HqqConfig,
 )
 
 from peft import (
@@ -27,6 +28,69 @@ from .utils import (
 )
 
 
+def load(
+    base_model_name_or_path: str,
+    peft_model_name_or_path: str = None,
+    quant_method: str = None,
+):
+    compute_dtype = torch.bfloat16
+
+    # TODO check flash-attn
+    model_kwargs = {"pretrained_model_name_or_path": base_model_name_or_path}
+    if torch.cuda.is_available():
+        model_kwargs.update(
+            {"torch_dtype": compute_dtype, "attn_implementation": "flash_attention_2", "device_map": "cuda"}
+        )
+    if quant_method == "nf4":
+        model_kwargs.update(
+            {
+                "quantization_config": BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=compute_dtype,
+                    bnb_4bit_use_double_quant=False,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_quant_storage="uint8",
+                )
+            }
+        )
+    elif quant_method == "fp4":
+        model_kwargs.update(
+            {
+                "quantization_config": BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=compute_dtype,
+                    bnb_4bit_use_double_quant=False,
+                    bnb_4bit_quant_type="fp4",
+                    bnb_4bit_quant_storage="uint8",
+                )
+            }
+        )
+        pass
+    elif quant_method == "hqq4":
+        quant_config = HqqConfig(nbits=4, group_size=64)
+        model_kwargs.update({"quantization_config": quant_config})
+    else:
+        raise ValueError(f"Unsupported quantization method {quant_method}")
+    model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
+
+    target_tokenizer = AutoTokenizer.from_pretrained(base_model_name_or_path)
+
+    # make sure the special tokens are the same as the base model when training
+    auto_add_special_tokens(model, target_tokenizer)
+
+    if peft_model_name_or_path:
+        peft_tokenizer = AutoTokenizer.from_pretrained(peft_model_name_or_path)
+        if len(target_tokenizer) != len(peft_tokenizer):
+            print(
+                f"Since the embedding of base model mismatch peft adapter ({len(target_tokenizer)} - {len(peft_tokenizer)}), resizing."
+            )
+            model.resize_token_embeddings(len(peft_tokenizer))
+        target_tokenizer = peft_tokenizer
+        model = PeftModel.from_pretrained(model, peft_model_name_or_path)
+
+    return model, target_tokenizer
+
+
 def resize_base_model_and_replace_lmhead_embed_tokens(
     base_model_name_or_path: str,
     peft_model_name_or_path: str,
@@ -39,16 +103,14 @@ def resize_base_model_and_replace_lmhead_embed_tokens(
 
     from safetensors.torch import load_file, save_file
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    if torch.cuda.is_available():
+        device_map = "cuda"
+    else:
+        device_map = None
     # 1. Load the base model, adapter model, and adapter config
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model_name_or_path, torch_dtype=torch.bfloat16
-    ).to(device)
+    model = AutoModelForCausalLM.from_pretrained(base_model_name_or_path, torch_dtype=torch.bfloat16, device_map=device_map)
     adapter_model = load_file(f"{peft_model_name_or_path}/adapter_model.safetensors")
-    with open(
-        f"{peft_model_name_or_path}/adapter_config.json", encoding="utf-8"
-    ) as file:
+    with open(f"{peft_model_name_or_path}/adapter_config.json", encoding="utf-8") as file:
         adapter_config = json.load(file)
 
     # 2. Check if the base model need to be resized
@@ -95,12 +157,8 @@ def resize_base_model_and_replace_lmhead_embed_tokens(
     peft_tokenizer.save_pretrained(resized_base_model_path)
 
     # Save the resized adapter model and tokenizer
-    save_file(
-        support_adapter_model, f"{resized_adapter_model_path}/adapter_model.safetensors"
-    )
-    with open(
-        f"{resized_adapter_model_path}/adapter_config.json", "w", encoding="utf-8"
-    ) as file:
+    save_file(support_adapter_model, f"{resized_adapter_model_path}/adapter_model.safetensors")
+    with open(f"{resized_adapter_model_path}/adapter_config.json", "w", encoding="utf-8") as file:
         json.dump(adapter_config, file, ensure_ascii=False, indent=4)
     peft_tokenizer.save_pretrained(resized_adapter_model_path)
 
@@ -112,88 +170,13 @@ def resize_base_model_and_replace_lmhead_embed_tokens(
     return resized_base_model_path, resized_adapter_model_path
 
 
-def load(
-    base_model_name_or_path: str,
-    peft_model_name_or_path: str = None,
-    load_in_4bit: bool = False,
-    sparse_named_mask_path: str = None,
-):
-    """
-    Load a language model with optional PEFT adapter and sparse mask.
-    This function loads a pre-trained causal language model and its tokenizer
-    from the given `base_model_name_or_path`. It also supports loading a
-    Parameter-Efficient Fine-Tuning (PEFT) adapter from `peft_model_name_or_path`,
-    resizing the token embeddings if necessary. Additionally, it allows applying
-    a sparse mask from `sparse_named_mask_path` to the model.
-
-    Note: quantization and sparse named mask is only applied to the base model
-    i.e, quantization(sparse(base_model)) + lora_model
-
-    Args:
-        base_model_name_or_path (str): Path or name of the base pre-trained model.
-        peft_model_name_or_path (str, optional): Path or name of the PEFT adapter model.
-            If provided, the adapter is loaded and integrated with the base model.
-        load_in_4bit (bool, optional): Whether to load the model in 4-bit precision for reduced memory usage.
-        sparse_named_mask_path (str, optional): Path to a sparse named mask file.
-
-    Returns:
-        Tuple[torch.nn.Module, transformers.PreTrainedTokenizer]:
-            - The loaded model, with optional PEFT and sparse mask applied,
-              automatically distributed on all available GPUs.
-            - The tokenizer corresponding to the final model configuration.
-    """
-    if sparse_named_mask_path and not peft_model_name_or_path:
-        raise ValueError(
-            "Sparse named mask can only be applied to a model with PEFT adapter."
-        )
-
-    accelerator = Accelerator()
-    device = accelerator.device
-
-    # TODO check flash-attn
-    model_kwargs = {}
-    if load_in_4bit:
-        model_kwargs["load_in_4bit"] = True
-    if torch.cuda.is_available():
-        model_kwargs["torch_dtype"] = torch.bfloat16
-
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model_name_or_path, **model_kwargs
-    )
-
-    target_tokenizer = AutoTokenizer.from_pretrained(base_model_name_or_path)
-
-    # make sure the special tokens are the same as the base model when training
-    auto_add_special_tokens(model, target_tokenizer)
-
-    if peft_model_name_or_path:
-        peft_tokenizer = AutoTokenizer.from_pretrained(peft_model_name_or_path)
-        if len(target_tokenizer) != len(peft_tokenizer):
-            print(
-                f"Since the embedding of base model mismatch peft adapter ({len(target_tokenizer)} - {len(peft_tokenizer)}), resizing."
-            )
-            model.resize_token_embeddings(len(peft_tokenizer))
-        target_tokenizer = peft_tokenizer
-        model = PeftModel.from_pretrained(model, peft_model_name_or_path)
-
-    if sparse_named_mask_path:
-        named_mask = torch.load(sparse_named_mask_path, map_location="cpu")
-        apply_sparse(model, named_mask)
-
-    model = accelerator.prepare(model)
-
-    return model, target_tokenizer
-
-
 def flexible_load(args):
     if args.flash_attn:
         import importlib.util
 
         flashattn_spec = importlib.util.find_spec("flash-attn")
         if flashattn_spec is None:
-            raise FileNotFoundError(
-                "You can not use flash_attn now since flash-attn was not installed."
-            )
+            raise FileNotFoundError("You can not use flash_attn now since flash-attn was not installed.")
 
     if torch.cuda.is_available():
         n_gpus = torch.cuda.device_count()
@@ -219,9 +202,7 @@ def flexible_load(args):
         assert args.bits in [16, 32]
 
     print_rank_0(f"loading base model {args.model_name_or_path}...")
-    compute_dtype = (
-        torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)
-    )
+    compute_dtype = torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)
 
     if args.quant:
         print_rank_0("LOADING QUANTIZED MODEL")
@@ -238,11 +219,7 @@ def flexible_load(args):
                 bnb_4bit_use_double_quant=args.double_quant,
                 bnb_4bit_quant_type=args.quant_type,
             ),
-            torch_dtype=(
-                torch.float16
-                if args.fp16
-                else (torch.bfloat16 if args.bf16 else torch.float32)
-            ),
+            torch_dtype=(torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)),
             trust_remote_code=args.trust_remote_code,
             use_auth_token=args.use_auth_token,
             attn_implementation="flash_attention_2" if args.flash_attn else "eager",
@@ -252,11 +229,7 @@ def flexible_load(args):
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name_or_path,
             device_map=device_map,
-            torch_dtype=(
-                torch.float16
-                if args.fp16
-                else (torch.bfloat16 if args.bf16 else torch.float32)
-            ),
+            torch_dtype=(torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)),
             trust_remote_code=args.trust_remote_code,
             use_auth_token=args.use_auth_token,
             attn_implementation="flash_attention_2" if args.flash_attn else "eager",
@@ -264,23 +237,17 @@ def flexible_load(args):
     if compute_dtype == torch.float16 and args.bits == 4:
         if torch.cuda.is_bf16_supported():
             print_rank_0("=" * 80)
-            print_rank_0(
-                "Your GPU supports bfloat16, you can accelerate training with the argument --bf16"
-            )
+            print_rank_0("Your GPU supports bfloat16, you can accelerate training with the argument --bf16")
             print_rank_0("=" * 80)
 
-    if compute_dtype == torch.float16 and (
-        is_ipex_available() and torch.xpu.is_available()
-    ):
+    if compute_dtype == torch.float16 and (is_ipex_available() and torch.xpu.is_available()):
         compute_dtype = torch.bfloat16
         print_rank_0("Intel XPU does not support float16 yet, so switching to bfloat16")
 
     # setattr(model, 'model_parallel', True)
     # setattr(model, 'is_parallelizable', True)
 
-    model.config.torch_dtype = (
-        torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)
-    )
+    model.config.torch_dtype = torch.float16 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     tokenizer.padding_side = "right"
@@ -296,13 +263,9 @@ def flexible_load(args):
             else tokenizer.convert_ids_to_tokens(model.config.eos_token_id)
         )
     if tokenizer.eos_token is None:
-        special_tokens_dict["eos_token"] = tokenizer.convert_ids_to_tokens(
-            model.config.eos_token_id
-        )
+        special_tokens_dict["eos_token"] = tokenizer.convert_ids_to_tokens(model.config.eos_token_id)
     if tokenizer.bos_token is None:
-        special_tokens_dict["bos_token"] = tokenizer.convert_ids_to_tokens(
-            model.config.bos_token_id
-        )
+        special_tokens_dict["bos_token"] = tokenizer.convert_ids_to_tokens(model.config.bos_token_id)
     if tokenizer.unk_token is None:
         special_tokens_dict["unk_token"] = (
             tokenizer.pad_token
@@ -342,12 +305,8 @@ def smart_tokenizer_and_embedding_resize(
         input_embeddings_data = model.get_input_embeddings().weight.data
         output_embeddings_data = model.get_output_embeddings().weight.data
 
-        input_embeddings_avg = input_embeddings_data[:-num_new_tokens].mean(
-            dim=0, keepdim=True
-        )
-        output_embeddings_avg = output_embeddings_data[:-num_new_tokens].mean(
-            dim=0, keepdim=True
-        )
+        input_embeddings_avg = input_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
+        output_embeddings_avg = output_embeddings_data[:-num_new_tokens].mean(dim=0, keepdim=True)
 
         input_embeddings_data[-num_new_tokens:] = input_embeddings_avg
         output_embeddings_data[-num_new_tokens:] = output_embeddings_avg

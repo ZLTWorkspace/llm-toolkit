@@ -3,12 +3,14 @@ from os.path import exists, isdir, join
 from typing import Optional
 
 import bitsandbytes as bnb
+from hqq.core.quantize import HQQLinear
 import torch
 import transformers
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
+    HqqConfig,
 )
 from transformers.pytorch_utils import Conv1D
 
@@ -62,7 +64,7 @@ def auto_add_special_tokens(model, tokenizer):
 
 
 def find_all_linear_names(model):
-    linear_cls = (bnb.nn.Linear4bit, bnb.nn.Linear8bitLt, torch.nn.Linear)
+    linear_cls = (bnb.nn.Linear4bit, bnb.nn.Linear8bitLt, torch.nn.Linear, HQQLinear)
     conv1d_cls = Conv1D
     lora_module_names = set()
     for name, module in model.named_modules():
@@ -275,7 +277,12 @@ def get_accelerate_model(
             )
             pass
         elif quant_method == "hqq4":
-            raise ValueError(f"Unsupported quantization method {quant_method}")
+            quant_config = HqqConfig(nbits=4, group_size=64)
+            pretrained_model_kwargs.update(
+                {
+                    "quantization_config": quant_config
+                }
+            )
         else:
             raise ValueError(f"Unsupported quantization method {quant_method}")
     else:

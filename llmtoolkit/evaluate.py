@@ -262,7 +262,7 @@ def infly_evaluate(
     task: str,
     model_name_or_path,
     peft_name_or_path: str = None,
-    load_in_4bit: bool = False,
+    quant_method: str = None,
     backend: InferBackend = InferBackend.VLLM,
 ) -> float:
     if task == "gsm8k":
@@ -287,7 +287,7 @@ def infly_evaluate(
     }
 
     results = batched_inference(
-        prompts, model_name_or_path, peft_name_or_path, load_in_4bit=load_in_4bit, max_tokens=max_tokens.get(task, 1024), backend=backend
+        prompts, model_name_or_path, peft_name_or_path, quant_method=quant_method, max_tokens=max_tokens.get(task, 1024), backend=backend
     )
 
     if get_rank() != 0 or results is None:
