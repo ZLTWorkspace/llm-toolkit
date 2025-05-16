@@ -86,6 +86,13 @@ class AdamW_lorafa(Optimizer):
                 # State initialization
                 if len(state) == 0:
                     if len(param_list) == 2:
+                        delta = 1e-8
+                        A = param_list[0]
+                        AA_T = A @ A.T
+                        AA_T_inv = torch.linalg.pinv(
+                            AA_T + delta * torch.eye(A.shape[0]).to(A.device)
+                        )
+                        state["AA_T_inv"] = AA_T_inv
                         state["step"] = 0
                         # Exponential moving average of gradient values
                         state["exp_avg_B"] = torch.zeros_like(param_list[1])
@@ -99,24 +106,9 @@ class AdamW_lorafa(Optimizer):
                         state["exp_avg_sq"] = torch.zeros_like(p)
 
                 if len(param_list) == 2:
-                    A = param_list[0]
                     B = param_list[1]
-                    # grad_A_orin = A.grad
                     grad_B_orin = B.grad
-
-                    # projection
-                    delta = 1e-8
-
-                    # computing the inverse matrix
-                    AA_T = A @ A.T
-                    # B_TB = B.T @ B
-                    AA_T_inv = torch.linalg.pinv(
-                        AA_T + delta * torch.eye(A.shape[0]).to(A.device)
-                    )
-                    # B_TB_inv = torch.linalg.pinv(B_TB + delta * torch.eye(A.shape[0]).to(A.device))
-
-                    with autocast(dtype=torch.bfloat16):
-                        grad_B = (1 / scaling_factor**2) * (grad_B_orin @ AA_T_inv)
+                    grad_B = (1 / scaling_factor**2) * (grad_B_orin @ state["AA_T_inv"])
                     if grad_B.dtype != B.grad.dtype:
                         grad_B = grad_B.to(B.grad.dtype)
 
@@ -173,6 +165,7 @@ class AdamW_lorafa(Optimizer):
                         p.add_(p, alpha=(-group["lr"] * group["weight_decay"]))
 
         return loss
+
 
 class zigzaglora(Optimizer):
     def __init__(
