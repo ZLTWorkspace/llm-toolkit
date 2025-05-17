@@ -91,7 +91,7 @@ class AdamW_lorafa(Optimizer):
                         AA_T = A @ A.T
                         AA_T_inv = torch.linalg.pinv(
                             AA_T + delta * torch.eye(A.shape[0]).to(A.device)
-                        )
+                        ).to(torch.bfloat16)
                         state["AA_T_inv"] = AA_T_inv
                         state["step"] = 0
                         # Exponential moving average of gradient values
