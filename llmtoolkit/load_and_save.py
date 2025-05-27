@@ -2,7 +2,6 @@ import os
 
 import torch
 import transformers
-from accelerate import Accelerator
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -16,9 +15,6 @@ from peft import (
 
 from .model import (
     auto_add_special_tokens,
-)
-from .sparse import (
-    apply_sparse,
 )
 from .utils import (
     create_timestamp,

@@ -6,12 +6,11 @@ import bitsandbytes as bnb
 import torch
 import torch.nn as nn
 
-from peft.utils.other import transpose
-
 from .utils import (
     _get_mask_prune_magnitude,
     decomposeW2LinearWeightLR,
     mergeW2AB,
+    transpose,
 )
 
 
@@ -414,6 +413,8 @@ class Linear(SQALoraLayer):
             raise ValueError("Not support yet.")
         elif self.quant_method == "hqq":
             raise ValueError("Not support yet.")
+        elif self.quant_method == "fp8":
+            pass
         else:
             raise ValueError("Only nf4, fp4, hqq are supported.")
 

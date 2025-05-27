@@ -1,6 +1,13 @@
-
 import torch
 
+
+def transpose(weight, fan_in_fan_out):
+    if not fan_in_fan_out:
+        return weight
+
+    if isinstance(weight, torch.nn.Parameter):
+        return torch.nn.Parameter(weight.T)
+    return weight.T
 
 @torch.no_grad()
 def _get_mask_prune_magnitude(
@@ -29,7 +36,7 @@ def _get_mask_prune_magnitude(
             W_mask = W_metric >= thresh
         else:
             thresh = torch.sort(W_metric.flatten())[0][int(W.numel() * sparsity_ratio)].cpu()
-            W_mask = W_metric <= thresh
+            W_mask = W_metric < thresh
     if offload:
         return W_mask.cpu()
     else:

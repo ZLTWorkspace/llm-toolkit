@@ -3,10 +3,10 @@ import shutil
 
 from llmtoolkit import (
     infly_evaluate,
+    load,
     print_rank_0,
     resize_base_model_and_replace_lmhead_embed_tokens,
     safe_dict2file,
-    load,
 )
 
 

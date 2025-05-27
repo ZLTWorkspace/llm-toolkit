@@ -9,7 +9,7 @@ from typing import Any
 import bitsandbytes as bnb
 import torch
 import torch.nn as nn
-from safetensors.torch import load_file, load_model, save_model
+from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 from transformers.pytorch_utils import Conv1D
 
@@ -51,6 +51,7 @@ class SQALoraModel(nn.Module):
         self.inject_adapter(self.model, sqalora_config)
         if self.sqalora_config.quantization:
             self.quantize()
+        self.modules_to_save = (nn.Linear, nn.Embedding, bnb.nn.Linear4bit)
 
     def forward(self, *args: Any, **kwargs: Any):
         return self.model.forward(*args, **kwargs)
@@ -243,12 +244,89 @@ class SQALoraModel(nn.Module):
             return 0.0
         return sum(rates) / len(rates)
 
+    def collect_tensors_to_save(self, prefix: str = "") -> dict[str, torch.Tensor]:
+        tensors: dict[str, torch.Tensor] = {}
+        seen_ptr: set[int] = set()
+
+        for module_name, module in self.named_modules():
+            if isinstance(module, self.modules_to_save):
+                for param_name, param_tensor in module.state_dict().items():
+                    if param_tensor.data_ptr() in seen_ptr:
+                        continue
+                    seen_ptr.add(param_tensor.data_ptr())
+
+                    key = f"{prefix}{module_name}.{param_name}" if module_name else f"{prefix}{param_name}"
+                    tensors[key] = param_tensor.detach().cpu()
+        for name in tensors.keys():
+            print_rank_0(f"Collecting {name} to save.")
+
+        return tensors
+
+    @staticmethod
+    def handle_weight(model: SQALoraModel, state_dict: dict[str, torch.Tensor]):
+        for name, module in model.named_modules():
+            module_weight_name = f"{name}.weight"
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                try:
+                    module.weight.copy_(state_dict[module_weight_name])
+                    # .to(module.weight.device)
+                    print_rank_0(f"Loading weight to {module_weight_name}")
+                except KeyError:
+                    print_rank_0(f"Cannot find {module_weight_name} in state_dict.")
+                    continue
+            elif isinstance(module, bnb.nn.Linear4bit):
+                try:
+                    weight = state_dict[module_weight_name]
+                    if weight.dtype == torch.bfloat16:
+                        module.weight = bnb.nn.Params4bit(
+                            weight,
+                            requires_grad=False,
+                            quant_type="nf4",
+                        ).to(module.weight.device)
+                        print_rank_0(f"Loading weight to {module_weight_name}")
+                    elif weight.dtype == torch.uint8:
+                        quantized_stats = {}
+                        for k, v in state_dict.items():
+                            if module_weight_name + "." in k:
+                                quantized_stats[k] = v
+                        print_rank_0(quantized_stats.keys())
+
+                        new_value = bnb.nn.Params4bit.from_prequantized(
+                            data=weight,
+                            quantized_stats=quantized_stats,
+                            requires_grad=False,
+                            device=module.weight.device,
+                        )
+                        module.weight = new_value
+                        print_rank_0(f"Loading weight to {module_weight_name}")
+                    else:
+                        raise ValueError(
+                            "When the type the layer is bnb.nn.Linear4bit, its state in state_dict must in [torch.bfloat16, torch.uint8]."
+                        )
+                except KeyError:
+                    print_rank_0(f"Cannot find {module_weight_name} in state_dict.")
+                    continue
+                except ValueError:
+                    print_rank_0(
+                        "When the type the layer is bnb.nn.Linear4bit, its state in state_dict must in [torch.bfloat16, torch.uint8]."
+                    )
+                    #TODO: should exit here
+                    continue
+            else:
+                # since the module is not nn.Linear or nn.Embedding or bnb.nn.Linear4bit, we don't need to handle it
+                continue
+
     @torch.no_grad()
     def save_pretrained(self, save_directory: str) -> None:
+        """
+        sqalora_model.safetensors should only contains the weights of the all linears.
+        """
         if not os.path.exists(save_directory):
             os.makedirs(save_directory, exist_ok=True)
         model_path = os.path.join(save_directory, "sqalora_model.safetensors")
-        save_model(self, model_path)
+        tensors = self.collect_tensors_to_save()
+        save_file(tensors, model_path)
+        # save_model(self, model_path)
         self.sqalora_config.save_pretrained(save_directory)
 
     @classmethod
@@ -259,6 +337,12 @@ class SQALoraModel(nn.Module):
         sqalora_model_name_or_path: str,
         **kwargs,
     ) -> SQALoraModel:
+        """
+        Load a SQALoraModel from path.
+        1. Load the SQALoraConfig.
+        2. construct the SQALoraModel based on SQALoraConfig and model.
+        3. should only replace the xx modules from ckpt to the model.
+        """
         sqalora_config = SQALoraConfig.from_pretrained(sqalora_model_name_or_path)
         sqalora_model = cls(model, sqalora_config)
 
@@ -267,6 +351,7 @@ class SQALoraModel(nn.Module):
             raise FileNotFoundError(f"Cannot find sqalora_model.safetensors in {safetensors_path}")
         state_dict = load_file(safetensors_path)
 
+        # TODO: refactor this part, construct the WL and WR when init the sqalora_model
         # process WL and WR
         for full_key in list(state_dict.keys()):
             if ".WL." not in full_key and ".WR." not in full_key:
@@ -301,21 +386,23 @@ class SQALoraModel(nn.Module):
                 lr_dict.update({step_name: new_linear})
 
         # missing, unexpected = sqalora_model.load_state_dict(state_dict, strict=False)
-        missing, unexpected = load_model(sqalora_model, safetensors_path, strict=False)
-        if len(unexpected) > 0:
-            warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {list(unexpected)[:10]} ...")
-        if len(missing) > 0:
-            warnings.warn(f"there are {len(missing)} parameters that missing: {list(missing)[:10]} ...")
+        # missing, unexpected = load_model(sqalora_model, safetensors_path, strict=False)
+        # if len(unexpected) > 0:
+        #     warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {list(unexpected)[:10]} ...")
+        # if len(missing) > 0:
+        #     warnings.warn(f"there are {len(missing)} parameters that missing: {list(missing)[:10]} ...")
         #TODO: check here, the expect output is:
         # unexpected only contains the quant_state, such as .absmax, .nested_absmax, .nested_quant_map, .quant_map, .quant_state.bitsandbytes__nf4
         # missing is empty
 
-        quant_method = sqalora_config.quant_method.lower()
-        _quant_load_handlers = {
-            "nf4": cls._load_nf4_weights,
-        }
-        handler_fn = _quant_load_handlers[quant_method]
-        handler_fn(sqalora_model, state_dict)
+        # quant_method = sqalora_config.quant_method.lower()
+        # _quant_load_handlers = {
+        #     "nf4": cls._load_nf4_weights,
+        # }
+        # handler_fn = _quant_load_handlers[quant_method]
+        # handler_fn(sqalora_model, state_dict)
+
+        cls.handle_weight(sqalora_model, state_dict)
 
         return sqalora_model
 
