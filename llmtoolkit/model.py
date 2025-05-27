@@ -360,6 +360,19 @@ def print_trainable_parameters(model, debug=False):
     )
     return (trainable_params, all_param, 100 * trainable_params / all_param)
 
+def print_linear_parameters(model, debug=False):
+    linear_params = 0
+    all_param = 0
+    for name, param in model.named_parameters():
+        all_param += param.numel()
+        if isinstance(param, (torch.nn.Linear, bnb.nn.Linear4bit, bnb.nn.Linear8bitLt)):
+            if debug:
+                print_rank_0(f"{name} is linear")
+            linear_params += param.numel()
+    print_rank_0(
+        f"linear params: {linear_params} || all params: {all_param} || linear%: {100 * linear_params / all_param:.2f}"
+    )
+    return (linear_params, all_param, 100 * linear_params / all_param)
 
 # deprecate
 

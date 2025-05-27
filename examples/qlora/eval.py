@@ -1,13 +1,20 @@
 import argparse
 import shutil
 
+import torch
+from accelerate import Accelerator
+from transformers import AutoTokenizer
+
 from llmtoolkit import (
+    evaluate_JIT,
+    get_accelerate_model,
     infly_evaluate,
     load,
     print_rank_0,
     resize_base_model_and_replace_lmhead_embed_tokens,
     safe_dict2file,
 )
+from peft import PeftModel
 
 
 def quant_and_save(base_model_name_or_path: str, quant_method: str):
@@ -80,6 +87,31 @@ def eval_peft_model(
     except Exception as e:
         print_rank_0(f"An exception occurred: {e}")
 
+def eval_hqq(base_model_name_or_path, peft_model_name_or_path, task):
+    accelerator = Accelerator()
+    model, tokenizer = get_accelerate_model(
+        base_model_name_or_path,
+        True,
+        "hqq4",
+        None,
+        flash_attn=True,
+        compute_dtype=torch.bfloat16,
+        parallelism="dp",
+    )
+    tokenizer = AutoTokenizer.from_pretrained(peft_model_name_or_path)
+    model = PeftModel.from_pretrained(model, peft_model_name_or_path)
+    model = accelerator.prepare(model)
+
+    model.eval()
+    acc = evaluate_JIT(task, model, tokenizer)
+
+    results = {}
+    results["model"] = base_model_name_or_path
+    results["peft"] = peft_model_name_or_path
+    results["task"] = task
+    results["accuracy"] = acc
+    safe_dict2file(results, "eval_result.txt")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate PEFT models")
@@ -111,9 +143,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print_rank_0(args)
 
-    eval_peft_model(
+    eval_hqq(
         task=args.task,
         base_model_name_or_path=args.base_model_name_or_path,
         peft_model_name_or_path=args.peft_model_name_or_path,
-        quant_method=args.quant_method,
     )
