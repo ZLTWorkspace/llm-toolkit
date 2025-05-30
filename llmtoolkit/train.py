@@ -3,6 +3,9 @@ import os
 
 import torch
 import transformers
+from accelerate import (
+    Accelerator,
+)
 from accelerate.utils import DistributedType
 from transformers import (
     set_seed,
@@ -33,6 +36,9 @@ from .model import (
     get_last_checkpoint,
     print_trainable_parameters,
 )
+from .sqalora import (
+    SQALoraModel,
+)
 from .trainer import (
     BaseSeq2SeqTrainer,
     Seq2SeqTrainer_optim,
@@ -52,6 +58,10 @@ def train(
     key: str,
     **kwargs,
 ):
+    accelerator = Accelerator()
+    if training_args.parallelism == "dp":
+        model = accelerator.prepare(model)
+
     set_seed(training_args.seed)
     if training_args.deepspeed:
         training_args.distributed_state.distributed_type = DistributedType.DEEPSPEED
@@ -138,14 +148,20 @@ def train(
         if save_strategy == "steps" or save_strategy == "epoch":
             trainer.save_metrics("train", metrics)
             trainer.save_state()
-            if training_args.unify_save and isinstance(trainer.model, PeftModel):
-                print_rank_0(f"merged model will be save at {os.path.join(training_args.output_dir, 'merged')}")
-                trainer.model = trainer.model.merge_and_unload()
-                trainer.save_model(os.path.join(training_args.output_dir, "merged"))
+            unwrap_model = accelerator.unwrap_model(trainer.model)
+            if not isinstance(unwrap_model, (PeftModel, transformers.PreTrainedModel, SQALoraModel)):
+                print_rank_0(
+                    "The model is not a PeftModel or PreTrainedModel or SQALoraModel, so it will not be saved. "
+                    "Since we need save_pretrained method to save the model"
+                )
             else:
-                trainer.model.save_pretrained(os.path.join(training_args.output_dir, "save"))
-                trainer.tokenizer.save_pretrained(os.path.join(training_args.output_dir, "save"))
-
+                if training_args.unify_save and isinstance(unwrap_model, PeftModel):
+                    print_rank_0(f"merged model will be save at {os.path.join(training_args.output_dir, 'merged')}")
+                    unwrap_model.merge_and_unload().save_pretrained(os.path.join(training_args.output_dir, "merged"))
+                    trainer.tokenizer.save_pretrained(os.path.join(training_args.output_dir, "merged"))
+                else:
+                    unwrap_model.save_pretrained(os.path.join(training_args.output_dir, "save"))
+                    trainer.tokenizer.save_pretrained(os.path.join(training_args.output_dir, "save"))
         else:
             print_rank_0(
                 "Since save_strategy is neither steps or epoch, there will be no model or checkpoint to save. This is an expected behavior when benchmarking the system efficiency of LLMs, this is an unexpected behavior when fine-tuning LLMs."

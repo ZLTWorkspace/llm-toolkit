@@ -47,11 +47,12 @@ class SQALoraModel(nn.Module):
         super().__init__()
         self.model = model
         self.sqalora_config = sqalora_config
+        self.dynamic_quantization_config = sqalora_config.dynamic_quantization_config
         self.targeted_module_names: list[str] = []
         self.inject_adapter(self.model, sqalora_config)
         if self.sqalora_config.quantization:
             self.quantize()
-        self.modules_to_save = (nn.Linear, nn.Embedding, bnb.nn.Linear4bit)
+        self.modules_to_save = (nn.Linear, nn.Embedding, bnb.nn.Linear4bit, bnb.nn.Linear8bitLt)
 
     def forward(self, *args: Any, **kwargs: Any):
         return self.model.forward(*args, **kwargs)
@@ -80,6 +81,10 @@ class SQALoraModel(nn.Module):
         parent,
     ):
         r = sqalora_config.r
+        quant_method = next(
+            (cfg for k, cfg in (self.dynamic_quantization_config or {}).items() if target_name in k),
+            sqalora_config.quant_method
+        )
         kwargs = {
             "r": r,
             "lora_alpha": sqalora_config.lora_alpha,
@@ -89,7 +94,7 @@ class SQALoraModel(nn.Module):
             "use_rslora": sqalora_config.use_rslora,
             "lora_bias": sqalora_config.lora_bias,
             "sparse_preserve_mode": sqalora_config.sparse_preserve_mode,
-            "quant_method": sqalora_config.quant_method,
+            "quant_method": quant_method,
             "loaded_in_8bit": getattr(self.model, "is_loaded_in_8bit", False),
             "loaded_in_4bit": getattr(self.model, "is_loaded_in_4bit", False),
         }
@@ -215,19 +220,21 @@ class SQALoraModel(nn.Module):
                 )
 
     def quantize(self):
-        #TODO: check if the model is on GPU
+        # TODO: check if the model is on GPU
         if self.device == "cpu" or self.model.device == "cpu":
-            print_rank_0("You are tring to quantize the model on cpu, which may cause errors. We recommend to quantize the model on GPU.")
+            print_rank_0(
+                "You are tring to quantize the model on cpu, which may cause errors. We recommend to quantize the model on GPU."
+            )
         for name, module in self.model.named_modules():
             if isinstance(module, Linear):
-                print_rank_0(f"Quantizing layer - {name}")
+                print_rank_0(f"Quantizing layer - {name} to {module.quant_method}")
                 module.quantize()
         self.sqalora_config.quantization = True
 
     def dequantize(self):
         for name, module in self.model.named_modules():
             if isinstance(module, Linear):
-                print_rank_0(f"Dequantizing layer - {name}")
+                print_rank_0(f"Dequantizing layer - {name} from {module.quant_method}")
                 module.dequantize()
         self.sqalora_config.quantization = False
 
@@ -251,10 +258,6 @@ class SQALoraModel(nn.Module):
         for module_name, module in self.named_modules():
             if isinstance(module, self.modules_to_save):
                 for param_name, param_tensor in module.state_dict().items():
-                    if param_tensor.data_ptr() in seen_ptr:
-                        continue
-                    seen_ptr.add(param_tensor.data_ptr())
-
                     key = f"{prefix}{module_name}.{param_name}" if module_name else f"{prefix}{param_name}"
                     tensors[key] = param_tensor.detach().cpu()
         for name in tensors.keys():
@@ -266,52 +269,49 @@ class SQALoraModel(nn.Module):
     def handle_weight(model: SQALoraModel, state_dict: dict[str, torch.Tensor]):
         for name, module in model.named_modules():
             module_weight_name = f"{name}.weight"
-            if isinstance(module, (nn.Linear, nn.Embedding)):
+            if isinstance(module, bnb.nn.Linear4bit):
+                print_rank_0(f"Loading weight to {module_weight_name}")
+                weight = state_dict[module_weight_name]
+                if weight.dtype in (torch.bfloat16, torch.float16, torch.float32):
+                    module.weight = bnb.nn.Params4bit(
+                        weight,
+                        requires_grad=False,
+                        quant_type=module.quant_state.quant_type,
+                    ).to(module.weight.device)
+                elif weight.dtype in (torch.uint8, torch.int8):
+                    quantized_stats = {}
+                    for k, v in state_dict.items():
+                        if module_weight_name + "." in k:
+                            quantized_stats[k] = v
+
+                    new_value = bnb.nn.Params4bit.from_prequantized(
+                        data=weight,
+                        quantized_stats=quantized_stats,
+                        requires_grad=False,
+                        device=module.weight.device,
+                    )
+                    module.weight = new_value
+            elif isinstance(module, bnb.nn.Linear8bitLt):
+                print_rank_0(f"Loading weight to {module_weight_name}")
+                weight = state_dict[module_weight_name]
+                if weight.dtype in (torch.bfloat16, torch.float16, torch.float32):
+                    module.weight = bnb.nn.Int8Params(
+                        weight,
+                        requires_grad=False,
+                    ).to(module.weight.device)
+                elif weight.dtype is torch.int8:
+                    module.weight = bnb.nn.Int8Params(
+                        data = weight,
+                        SCB = state_dict[name + ".SCB"],
+                        requires_grad=False,
+                    ).to(module.weight.device)
+            elif isinstance(module, (nn.Linear, nn.Embedding)):
                 try:
                     module.weight.copy_(state_dict[module_weight_name])
-                    # .to(module.weight.device)
                     print_rank_0(f"Loading weight to {module_weight_name}")
                 except KeyError:
                     print_rank_0(f"Cannot find {module_weight_name} in state_dict.")
-                    continue
-            elif isinstance(module, bnb.nn.Linear4bit):
-                try:
-                    weight = state_dict[module_weight_name]
-                    if weight.dtype == torch.bfloat16:
-                        module.weight = bnb.nn.Params4bit(
-                            weight,
-                            requires_grad=False,
-                            quant_type="nf4",
-                        ).to(module.weight.device)
-                        print_rank_0(f"Loading weight to {module_weight_name}")
-                    elif weight.dtype == torch.uint8:
-                        quantized_stats = {}
-                        for k, v in state_dict.items():
-                            if module_weight_name + "." in k:
-                                quantized_stats[k] = v
-                        print_rank_0(quantized_stats.keys())
-
-                        new_value = bnb.nn.Params4bit.from_prequantized(
-                            data=weight,
-                            quantized_stats=quantized_stats,
-                            requires_grad=False,
-                            device=module.weight.device,
-                        )
-                        module.weight = new_value
-                        print_rank_0(f"Loading weight to {module_weight_name}")
-                    else:
-                        raise ValueError(
-                            "When the type the layer is bnb.nn.Linear4bit, its state in state_dict must in [torch.bfloat16, torch.uint8]."
-                        )
-                except KeyError:
-                    print_rank_0(f"Cannot find {module_weight_name} in state_dict.")
-                    continue
-                except ValueError:
-                    print_rank_0(
-                        "When the type the layer is bnb.nn.Linear4bit, its state in state_dict must in [torch.bfloat16, torch.uint8]."
-                    )
-                    #TODO: should exit here
-                    continue
+                continue
             else:
                 # since the module is not nn.Linear or nn.Embedding or bnb.nn.Linear4bit, we don't need to handle it
                 continue
@@ -326,7 +326,6 @@ class SQALoraModel(nn.Module):
         model_path = os.path.join(save_directory, "sqalora_model.safetensors")
         tensors = self.collect_tensors_to_save()
         save_file(tensors, model_path)
-        # save_model(self, model_path)
         self.sqalora_config.save_pretrained(save_directory)
 
     @classmethod
@@ -391,7 +390,7 @@ class SQALoraModel(nn.Module):
         #     warnings.warn(f"there are {len(unexpected)} parameters that unexpected: {list(unexpected)[:10]} ...")
         # if len(missing) > 0:
         #     warnings.warn(f"there are {len(missing)} parameters that missing: {list(missing)[:10]} ...")
-        #TODO: check here, the expect output is:
+        # TODO: check here, the expect output is:
         # unexpected only contains the quant_state, such as .absmax, .nested_absmax, .nested_quant_map, .quant_map, .quant_state.bitsandbytes__nf4
         # missing is empty
 
@@ -446,7 +445,6 @@ class SQALoraModel(nn.Module):
                         for k, v in state_dict.items():
                             if base_layer_name + "." in k:
                                 quantized_stats[k] = v
-                        print_rank_0(quantized_stats.keys())
 
                         new_value = bnb.nn.Params4bit.from_prequantized(
                             data=param_value,

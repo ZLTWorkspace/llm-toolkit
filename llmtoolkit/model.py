@@ -230,7 +230,9 @@ def get_accelerate_model(
         "torch_dtype": compute_dtype,
     }
     if parallelism == "dp":
-        pretrained_model_kwargs.update({"device_map": "cuda"})
+        # TODO: check if load the model on the first GPU is ok when there is a acceletate prepare later
+        # pretrained_model_kwargs.update({"device_map": "cuda:0"})
+        pass
     elif parallelism == "pp":
         pretrained_model_kwargs.update({"device_map": "auto"})
 

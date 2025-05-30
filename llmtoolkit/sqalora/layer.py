@@ -410,13 +410,56 @@ class Linear(SQALoraLayer):
             self.quant_state = qlinear.weight.quant_state
             self.quantized = True
         elif self.quant_method == "fp4":
-            raise ValueError("Not support yet.")
+            device = self.base_layer.weight.device
+            weight_bf16 = self.base_layer.weight.detach().to(compute_dtype).contiguous()
+            bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
+
+            qlinear = bnb.nn.Linear4bit(
+                self.in_features,
+                self.out_features,
+                bias=bias is not None,
+                compute_dtype=compute_dtype,
+                quant_type="fp4",
+            ).to(device)
+
+            qlinear.weight = bnb.nn.Params4bit(
+                weight_bf16,
+                requires_grad=False,
+                quant_type="fp4",
+            ).to(device)
+            if bias is not None:
+                qlinear.bias = nn.Parameter(bias)
+            self.base_layer = qlinear
+            self.quant_state = qlinear.weight.quant_state
+            self.quantized = True
         elif self.quant_method == "hqq":
-            raise ValueError("Not support yet.")
+            raise NotImplementedError("hqq quantization is not implemented yet.")
         elif self.quant_method == "fp8":
-            pass
+            raise NotImplementedError("FP8 quantization is not implemented yet.")
+        elif self.quant_method == "int8":
+            device = self.base_layer.weight.device
+            weight_bf16 = self.base_layer.weight.detach().to(compute_dtype).contiguous()
+            bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
+            qlinear = bnb.nn.Linear8bitLt(
+                self.in_features,
+                self.out_features,
+                bias=bias is not None,
+                threshold=6.0,
+                has_fp16_weights=False,
+            ).to(device)
+
+            qlinear.weight = bnb.nn.Int8Params(
+                weight_bf16,
+                requires_grad=False,
+            ).to(device)
+            if bias is not None:
+                qlinear.bias = nn.Parameter(bias)
+            self.base_layer = qlinear
+            self.quantized = True
+        elif self.quant_method == "mxfp4":
+            raise NotImplementedError("MXFP4 quantization is not implemented yet.")
         else:
-            raise ValueError("Only nf4, fp4, hqq are supported.")
+            raise ValueError("Only nf4, fp4, hqq, fp8, mxfp4 are supported.")
 
     @torch.no_grad()
     def dequantize(
@@ -431,7 +474,7 @@ class Linear(SQALoraLayer):
                 raise RuntimeError(f"The quantization method is {self.quant_method}, however the type of base_layer is {type(self.base_layer)}.")
 
             weight_bf16 = bnb.functional.dequantize_4bit(
-                self.base_layer.weight.data, self.base_layer.weight.quant_state
+                self.base_layer.weight.data, self.base_layer.weight.quant_state, quant_type = "nf4"
             )
             # assert weight_bf16.dtype == compute_dtype
             bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
@@ -451,11 +494,61 @@ class Linear(SQALoraLayer):
             self.quant_state = None
             self.quantized = False
         elif self.quant_method == "fp4":
-            raise ValueError("Not support yet.")
+            if not isinstance(self.base_layer, bnb.nn.Linear4bit):
+                raise RuntimeError(f"The quantization method is {self.quant_method}, however the type of base_layer is {type(self.base_layer)}.")
+
+            weight_bf16 = bnb.functional.dequantize_4bit(
+                self.base_layer.weight.data, self.base_layer.weight.quant_state, quant_type = "nf4"
+            )
+            # assert weight_bf16.dtype == compute_dtype
+            bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
+
+            dense = nn.Linear(
+                self.in_features,
+                self.out_features,
+                bias=bias is not None,
+                dtype=compute_dtype,
+                device=weight_bf16.device,
+            )
+            dense.weight.data.copy_(weight_bf16)
+            if bias is not None:
+                dense.bias.data.copy_(bias)
+
+            self.base_layer = dense
+            self.quant_state = None
+            self.quantized = False
         elif self.quant_method == "hqq":
-            raise ValueError("Not support yet.")
+            raise NotImplementedError("hqq quantization is not implemented yet.")
+        elif self.quant_method == "fp8":
+            raise NotImplementedError("FP8 quantization is not implemented yet.")
+        elif self.quant_method == "int8":
+            if not isinstance(self.base_layer, bnb.nn.Linear8bitLt):
+                raise RuntimeError(f"The quantization method is {self.quant_method}, however the type of base_layer is {type(self.base_layer)}.")
+
+            weight_bf16 = bnb.functional.int8_vectorwise_dequant(
+                self.base_layer.weight.data, self.base_layer.weight.SCB
+            )
+            # assert weight_bf16.dtype == compute_dtype
+            bias = None if self.base_layer.bias is None else self.base_layer.bias.detach().clone()
+
+            dense = nn.Linear(
+                self.in_features,
+                self.out_features,
+                bias=bias is not None,
+                dtype=compute_dtype,
+                device=weight_bf16.device,
+            )
+            dense.weight.data.copy_(weight_bf16)
+            if bias is not None:
+                dense.bias.data.copy_(bias)
+
+            self.base_layer = dense
+            self.quant_state = None
+            self.quantized = False
+        elif self.quant_method == "mxfp4":
+            raise NotImplementedError("MXFP4 quantization is not implemented yet.")
         else:
-            raise ValueError("Only nf4, fp4, hqq are supported.")
+            raise ValueError("Only nf4, fp4, hqq, fp8, int8, mxfp4 are supported.")
 
     @torch.no_grad()
     def apply_sparse_mask(self, sparse_mask: torch.Tensor):
@@ -470,6 +563,13 @@ class Linear(SQALoraLayer):
         num_zeros = torch.sum(torch.abs(base_layer.weight.data) < eps).item()
         total = base_layer.weight.data.numel()
         return num_zeros / total
+
+    # @torch.no_grad()
+    # def sparsity(self, eps=1e-8) -> float:
+    #     base_layer = self.get_base_layer()
+    #     num_zeros = torch.sum(torch.abs(base_layer.weight.data) < eps).item()
+    #     total = base_layer.weight.data.numel()
+    #     return num_zeros / total
 
     def _cast_input_dtype(self, x: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
         if x.dtype == dtype:

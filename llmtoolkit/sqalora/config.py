@@ -80,12 +80,16 @@ class SQALoraConfig:
     sparse_preserve_mode: int = field(
         default=0, metadata={"help": "Merge sparse W into A and B to preserve accuracy. Default is 0."}
     )
-    quant_method: str = field(
-        default="nf4", metadata={"help": "Quantization method to use, nf4 -> bnb nf4, mxfp4 -> xx."}
-    )
     quantization: bool = field(
         default=False,
         metadata={"help": "Whether to quantize the base weight when generating SQALoramodel. This is useful when from_pretrained."},
+    )
+    quant_method: str = field(
+        default="nf4", metadata={"help": "Quantization method to use, nf4 -> bnb nf4, mxfp4 -> mxfp4."}
+    )
+    dynamic_quantization_config: dict = field(
+        default=None,
+        metadata={"help": "Dynamic configuration for the SQALoraModel, such as quantization parameters."},
     )
 
     def save_pretrained(self, save_directory: str) -> None:

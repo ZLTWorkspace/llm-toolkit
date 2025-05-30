@@ -1,3 +1,4 @@
+
 import torch
 from accelerate import Accelerator
 from tqdm import tqdm
@@ -51,6 +52,7 @@ def transformers_inference(
         )
     model.eval()
     accelerator = Accelerator()
+    model = accelerator.prepare(model)
     tokenizer.padding_side = "left"
 
     prompts_with_lengths = [(i, prompt, len(tokenizer.tokenize(prompt))) for i, prompt in enumerate(prompts)]
@@ -60,12 +62,8 @@ def transformers_inference(
 
     all_predictions = [None] * len(prompts)
 
-    print(tokenizer.pad_token_id)
-    print(tokenizer.eos_token_id)
-    print(tokenizer.decode([tokenizer.eos_token_id]))
-
     num_batches = (len(sorted_prompts) + batch_size - 1) // batch_size
-    for batch_idx in tqdm(range(num_batches), desc="Inference Progress"):
+    for batch_idx in tqdm(range(num_batches), desc="Inference Progress") if accelerator.is_main_process else range(num_batches):
         if batch_idx % accelerator.num_processes != accelerator.process_index:
             continue
 
@@ -90,6 +88,7 @@ def transformers_inference(
                 do_sample=True,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
+                use_cache=True,
             )
         input_ids = encoded_prompts["input_ids"]
         generated_outputs = []
@@ -108,7 +107,6 @@ def transformers_inference(
         return predictions
     else:
         return None
-
 
 @rank_0
 def single_inference(
