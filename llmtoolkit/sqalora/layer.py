@@ -335,35 +335,6 @@ class Linear(SQALoraLayer):
             raise ValueError("sparse_preserve_mode should be in (0,1,2).")
         if self.quantized:
             self.dequantize()
-            # when sparse_prune_largest is True, we only perform sparse on base weight without merging
-            # since sparse_prune_largest is mainly designed for quantized tiles
-            if sparse_prune_largest:
-                base_layer = self.get_base_layer()
-                sparse_mask = _get_mask_prune_magnitude(
-                    base_layer.weight.data,
-                    sparsity_ratio,
-                    prune_n,
-                    prune_m,
-                    sparse_prune_largest,
-                    offload,
-                )
-                self.apply_sparse_and_update_WL_WR(sparse_mask)
-            else:
-                self.merge()
-                base_layer = self.get_base_layer()
-                sparse_mask = _get_mask_prune_magnitude(
-                    base_layer.weight.data,
-                    sparsity_ratio,
-                    prune_n,
-                    prune_m,
-                    sparse_prune_largest,
-                    offload,
-                )
-                self.unmerge()
-                self.apply_sparse_and_update_WL_WR(sparse_mask)
-            self.quantize()
-        else:
-            self.merge()
             base_layer = self.get_base_layer()
             sparse_mask = _get_mask_prune_magnitude(
                 base_layer.weight.data,
@@ -373,9 +344,19 @@ class Linear(SQALoraLayer):
                 sparse_prune_largest,
                 offload,
             )
-            self.unmerge()
             self.apply_sparse_and_update_WL_WR(sparse_mask)
-
+            self.quantize()
+        else:
+            base_layer = self.get_base_layer()
+            sparse_mask = _get_mask_prune_magnitude(
+                base_layer.weight.data,
+                sparsity_ratio,
+                prune_n,
+                prune_m,
+                sparse_prune_largest,
+                offload,
+            )
+            self.apply_sparse_and_update_WL_WR(sparse_mask)
 
     @torch.no_grad()
     def quantize(
