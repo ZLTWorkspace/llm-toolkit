@@ -4,7 +4,7 @@ import dataclasses
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Union
+from typing import Literal, Union
 
 
 @dataclass
@@ -22,7 +22,7 @@ class SQALoraConfig:
     """
 
     r: int = field(default=8, metadata={"help": "Lora attention dimension"})
-    target_modules: Optional[Union[list[str], str]] = field(
+    target_modules: Union[list[str], str] | None = field(
         default=None,
         metadata={
             "help": (

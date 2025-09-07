@@ -8,6 +8,7 @@ import torch.nn as nn
 
 from .utils import (
     _get_mask_prune_magnitude,
+    cast_input_dtype,
     decomposeW2LinearWeightLR,
     mergeW2AB,
     transpose,
@@ -255,7 +256,7 @@ class Linear(SQALoraLayer):
             lora_B = self.lora_B
             dropout = self.lora_dropout
             scaling = self.scaling
-            x = self._cast_input_dtype(x, self.lora_A.weight.dtype)
+            x = cast_input_dtype(x, self.lora_A.weight.dtype)
             if self.sparse_preserve_mode == 0:
                 result = result + lora_B(lora_A(dropout(x))) * scaling
             elif self.sparse_preserve_mode == 1:
@@ -552,11 +553,6 @@ class Linear(SQALoraLayer):
     #     total = base_layer.weight.data.numel()
     #     return num_zeros / total
 
-    def _cast_input_dtype(self, x: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-        if x.dtype == dtype:
-            return x
-        else:
-            return x.to(dtype)
 
     def __repr__(self) -> str:
         rep = super().__repr__()

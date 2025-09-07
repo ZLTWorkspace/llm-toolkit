@@ -1,7 +1,6 @@
 import argparse
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 import transformers
 
@@ -13,23 +12,23 @@ from .utils import (
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="meta-llama/Llama-2-7b-hf")
-    peft_name_or_path: Optional[str] = field(default=None)
-    unify_load: Optional[bool] = field(
+    model_name_or_path: str | None = field(default="meta-llama/Llama-2-7b-hf")
+    peft_name_or_path: str | None = field(default=None)
+    unify_load: bool | None = field(
         default=False,
         metadata={"help": "Whether to merge the adapter into base mode after loaded."},
     )
-    trust_remote_code: Optional[bool] = field(
+    trust_remote_code: bool | None = field(
         default=True,
         metadata={
             "help": "Enable unpickling of arbitrary code in AutoModelForCausalLM#from_pretrained."
         },
     )
-    use_auth_token: Optional[bool] = field(
+    use_auth_token: bool | None = field(
         default=False,
         metadata={"help": "Enables using Huggingface auth token from Git Credentials."},
     )
-    peft: Optional[str] = field(
+    peft: str | None = field(
         default=None,
         metadata={
             "help": "To use peft, choose from [lora|lorafa|vera|dora|adalora|loraga|prompt|embedding]"
@@ -47,7 +46,7 @@ class ModelArguments:
         },
     )
     lora_dropout: float = field(default=0.0, metadata={"help": "lora dropout."})
-    lora_percent: Optional[float] = field(
+    lora_percent: float | None = field(
         default=1.0,
         metadata={
             "help": "lora layers percentage from 0-1. Default is 1.0, i.e., 100% lora layers will be applied. *FOR TEST ONLY DO NOT USE*"
@@ -59,7 +58,7 @@ class ModelArguments:
             "help": "The method to init lora_A and lora_B. Choose from [gaussian, pissa, olora]."
         },
     )
-    lora_modules: Optional[str] = field(
+    lora_modules: str | None = field(
         default="all",
         metadata={
             "help": "Where to apply lora_modules. 1. [all|attention|mlp] - apply lora to [all|attention|mlp] linear layers. 2. module1,module2 - apply lora only to module 1 and moudule 2; moudles must be separated by ','."
@@ -88,14 +87,14 @@ class DataArguments:
     eval_dataset_size: int = field(
         default=0.1, metadata={"help": "Size of validation dataset."}
     )
-    max_train_samples: Optional[int] = field(
+    max_train_samples: int | None = field(
         default=None,
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of training examples to this "
             "value if set."
         },
     )
-    max_eval_samples: Optional[int] = field(
+    max_eval_samples: int | None = field(
         default=None,
         metadata={
             "help": "For debugging purposes or quicker training, truncate the number of evaluation examples to this "
@@ -124,13 +123,13 @@ class DataArguments:
         default="alpaca",
         metadata={"help": "Which dataset to finetune on. See dataset.py for options."},
     )
-    metrics_path: Optional[str] = field(
+    metrics_path: str | None = field(
         default=None,
         metadata={
             "help": "Where to find the metrics locally, otherwise it will download from huggingface if set to None."
         },
     )
-    train_on_source: Optional[bool] = field(
+    train_on_source: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to train on the input in addition to the target text. **Mostly used in pretraining."
@@ -140,19 +139,19 @@ class DataArguments:
 
 @dataclass
 class TrainingArguments(transformers.Seq2SeqTrainingArguments):
-    cache_dir: Optional[str] = field(default=None)
+    cache_dir: str | None = field(default=None)
     adam8bit: bool = field(default=False, metadata={"help": "Use 8-bit adam."})
     report_to: str = field(
         default="none",
         metadata={"help": "To use wandb or something else for reporting."},
     )
-    clean_cache: Optional[bool] = field(
+    clean_cache: bool | None = field(
         default=False,
         metadata={
             "help": "Whether to clean the cache when training. *DEBUG ONLY - DO NOT USE*"
         },
     )
-    run_name: Optional[str] = field(
+    run_name: str | None = field(
         default=None,
         metadata={
             "help": "An optional descriptor for the run. Notably used for wandb logging."
@@ -325,33 +324,33 @@ class GenerationArguments:
     # For more hyperparameters check:
     # https://huggingface.co/docs/transformers/main_classes/text_generation#transformers.GenerationConfig
     # Length arguments
-    max_new_tokens: Optional[int] = field(
+    max_new_tokens: int | None = field(
         default=256,
         metadata={
             "help": "Maximum number of new tokens to be generated in evaluation or prediction loops"
             "if predict_with_generate is set."
         },
     )
-    min_new_tokens: Optional[int] = field(
+    min_new_tokens: int | None = field(
         default=None, metadata={"help": "Minimum number of new tokens to generate."}
     )
 
     # Generation strategy
-    do_sample: Optional[bool] = field(default=True)
-    num_beams: Optional[int] = field(default=1)
-    num_beam_groups: Optional[int] = field(default=1)
-    penalty_alpha: Optional[float] = field(default=None)
-    use_cache: Optional[bool] = field(default=False)
+    do_sample: bool | None = field(default=True)
+    num_beams: int | None = field(default=1)
+    num_beam_groups: int | None = field(default=1)
+    penalty_alpha: float | None = field(default=None)
+    use_cache: bool | None = field(default=False)
 
     # Hyperparameters for logit manipulation
-    temperature: Optional[float] = field(default=0.0)
-    top_k: Optional[int] = field(default=50)
-    top_p: Optional[float] = field(default=0.1)
-    typical_p: Optional[float] = field(default=1.0)
-    diversity_penalty: Optional[float] = field(default=0.0)
-    repetition_penalty: Optional[float] = field(default=1.0)
-    length_penalty: Optional[float] = field(default=1.0)
-    no_repeat_ngram_size: Optional[int] = field(default=0)
+    temperature: float | None = field(default=0.0)
+    top_k: int | None = field(default=50)
+    top_p: float | None = field(default=0.1)
+    typical_p: float | None = field(default=1.0)
+    diversity_penalty: float | None = field(default=0.0)
+    repetition_penalty: float | None = field(default=1.0)
+    length_penalty: float | None = field(default=1.0)
+    no_repeat_ngram_size: int | None = field(default=0)
 
 
 def get_args() -> tuple[ModelArguments, DataArguments, TrainingArguments]:

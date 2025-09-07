@@ -132,6 +132,12 @@ def decomposeW2LinearWeightLR(W: torch.Tensor, r: int):
 
     return L.to(dtype=W.dtype), R.to(dtype=W.dtype)
 
+@torch.no_grad()
+def cast_input_dtype(x: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    if x.dtype == dtype:
+        return x
+    else:
+        return x.to(dtype)
 
 def relativeError(a: torch.Tensor, b: torch.Tensor):
     return torch.norm(a - b, p="fro") / torch.norm(a, p="fro")

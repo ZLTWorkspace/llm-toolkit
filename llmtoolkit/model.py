@@ -1,6 +1,5 @@
 import os
 from os.path import exists, isdir, join
-from typing import Optional
 
 import bitsandbytes as bnb
 import torch
@@ -204,13 +203,13 @@ def peft_model(
 def get_accelerate_model(
     model_name_or_path: str,
     quant: bool = False,
-    quant_method: Optional[str] = None,
-    peft_config: Optional[PEFTConfig] = None,
+    quant_method: str | None = None,
+    peft_config: PEFTConfig | None = None,
     flash_attn: bool = True,
     compute_dtype: torch.dtype = torch.bfloat16,
     parallelism: str = "none",
     gradient_checkpointing: bool = False,
-    deepspeed: Optional[str] = None,
+    deepspeed: str | None = None,
     **kwargs,
 ):
     if flash_attn:
