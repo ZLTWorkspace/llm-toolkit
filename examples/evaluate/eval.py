@@ -18,7 +18,6 @@ def eval_base_model(
     acc = infly_evaluate(
         task=task,
         model_name_or_path=base_model_name_or_path,
-        load_in_4bit=load_in_4bit,
         backend=backend,
     )
 

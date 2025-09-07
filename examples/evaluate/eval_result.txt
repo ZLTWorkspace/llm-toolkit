@@ -1,0 +1,6 @@
+{
+    "model": "/mnt/sdb/zhanglongteng/sdd/zhanglongteng/Qwen3-8B/",
+    "bits": 16,
+    "task": "gsm8k",
+    "accuracy": 0.7687642153146323
+}
