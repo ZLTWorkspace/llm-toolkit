@@ -229,7 +229,8 @@ def replace_linear_with_cclinear(
 ):
     for name, child in module.named_children():
         full_name = f"{prefix}.{name}" if prefix else name
-        if name == "lm_head":
+        if name == "lm_head" or "lora_A" in name or "lora_B" in name:
+            print(f"[replace_linear_with_cclinear] Skipped {full_name}")
             continue
 
         if isinstance(child, nn.Linear):
