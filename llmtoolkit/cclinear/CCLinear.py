@@ -178,6 +178,9 @@ class CCLinear(nn.Module):
         self.out_features = linear.out_features
         self.bias = None
 
+        # here we set rank = 32, which might not be optimal for all models
+        self.rank = 32
+
         if implementation == 0:
             self.compressed_linear = CompressedLinear.from_linear(linear, quant, prune, compute_type)
             residual = linear.weight - self.compressed_linear.get_decompressed_weight()
@@ -185,7 +188,7 @@ class CCLinear(nn.Module):
             residual = decompose_and_reconstruct(
                 residual.to(torch.float32),
                 method="svd",
-                rank=32
+                rank=self.rank,
             ).to(self.residual_dtype)
 
             self.residual_linear = nn.Linear(self.in_features, self.out_features, bias=False)
@@ -193,7 +196,7 @@ class CCLinear(nn.Module):
 
         elif implementation == 1:
             W = linear.weight.detach().clone().to(self.compute_type).contiguous()
-            W = decompose_and_reconstruct(W.to(torch.float32), method="svd", rank=32).to(self.compute_type)
+            W = decompose_and_reconstruct(W.to(torch.float32), method="svd", rank=self.rank).to(self.compute_type)
             linear.weight.data = linear.weight.data - W.to(linear.weight.dtype)
             self.compressed_linear = CompressedLinear.from_linear(linear, quant, prune, compute_type)
             self.residual_linear = nn.Linear(self.in_features, self.out_features, bias=False)
