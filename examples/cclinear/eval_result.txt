@@ -1,0 +1,18 @@
+{
+    "model": "/mnt/sdb/zhanglongteng/sdd/zhanglongteng/Meta-Llama-3-8B-Instruct",
+    "implementation": 0,
+    "task": "gsm8k",
+    "accuracy": 0.6732373009855952
+}
+{
+    "model": "/mnt/sdb/zhanglongteng/sdd/zhanglongteng/Meta-Llama-3-8B-Instruct",
+    "implementation": 1,
+    "task": "gsm8k",
+    "accuracy": 0.6239575435936315
+}
+{
+    "model": "/mnt/sdb/zhanglongteng/sdd/zhanglongteng/Meta-Llama-3-8B-Instruct",
+    "implementation": baseline,
+    "task": "gsm8k",
+    "accuracy": 0.711144806671721
+}
